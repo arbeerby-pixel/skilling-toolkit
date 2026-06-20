@@ -45,8 +45,8 @@ import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.StatChanged;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.ComponentID;
-import net.runelite.api.widgets.WidgetID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -2777,9 +2777,8 @@ public class SkillingToolkitPlugin extends Plugin
 	private boolean isPriceCheckerWidgetId(int widgetId)
 	{
 		int groupId = widgetId >>> 16;
-		return groupId == WidgetID.GUIDE_PRICES_GROUP_ID
-			|| groupId == WidgetID.GUIDE_PRICES_INVENTORY_GROUP_ID
-			|| groupId == WidgetID.GUIDE_PRICE_GROUP_ID;
+		return groupId == InterfaceID.GE_PRICECHECKER
+			|| groupId == InterfaceID.GE_PRICECHECKER_SIDE;
 	}
 
 	private void detectCropProtectionDialog()
