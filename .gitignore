@@ -1,0 +1,11 @@
+.gradle/
+build/
+.idea/
+*.iml
+out/
+icon-options/
+examples/
+templates/
+toolkit/
+scripts/
+DEV_RUNELITE.md
