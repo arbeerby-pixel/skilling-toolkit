@@ -28,6 +28,7 @@ https://discord.gg/utYem4XhQS
 ### Trackers and interface
 
 - Dynamic chat-tab trackers show XP, top skill, profit, cost, and actions in the order they become active.
+- When PvM Toolkit is also enabled, the `All` chat tab switches manually between skilling and PvM trackers while activity can still switch them automatically.
 - The Trade tab remains a local 24-hour clock.
 - The inventory infobox shows free slots and inventory value.
 - Sidebar statistics are available for day, week, month, year, and all time.

@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.NpcID;
 
 enum FarmingPatch
 {
@@ -156,6 +157,11 @@ enum FarmingPatch
 
 	static FarmingPatch fromFarmer(int farmerId, int patchNumber, WorldPoint anchor)
 	{
+		if (isFossilIslandSquirrel(farmerId))
+		{
+			return nearestFossilIslandHardwoodTo(anchor);
+		}
+
 		if (patchNumber >= 0)
 		{
 			FarmingPatch numberedPatch = PATCHES_BY_FARMER_AND_NUMBER.get(farmerPatchKey(farmerId, patchNumber));
@@ -186,6 +192,40 @@ enum FarmingPatch
 				continue;
 			}
 
+			if (patch.tile.getPlane() != anchor.getPlane())
+			{
+				continue;
+			}
+
+			int distance = patch.tile.distanceTo(anchor);
+			if (distance < nearestDistance)
+			{
+				nearestDistance = distance;
+				nearestPatch = patch;
+			}
+		}
+
+		return nearestPatch;
+	}
+
+	private static boolean isFossilIslandSquirrel(int farmerId)
+	{
+		return farmerId == NpcID.FOSSIL_SQUIRREL_GARDENER1
+			|| farmerId == NpcID.FOSSIL_SQUIRREL_GARDENER2
+			|| farmerId == NpcID.FOSSIL_SQUIRREL_GARDENER3;
+	}
+
+	private static FarmingPatch nearestFossilIslandHardwoodTo(WorldPoint anchor)
+	{
+		if (anchor == null)
+		{
+			return null;
+		}
+
+		FarmingPatch nearestPatch = null;
+		int nearestDistance = Integer.MAX_VALUE;
+		for (FarmingPatch patch : new FarmingPatch[] {HARDWOOD_WEST, HARDWOOD_SOUTH, HARDWOOD_EAST})
+		{
 			if (patch.tile.getPlane() != anchor.getPlane())
 			{
 				continue;
