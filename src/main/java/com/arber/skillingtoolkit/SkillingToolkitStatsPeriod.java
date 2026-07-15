@@ -2,7 +2,6 @@ package com.arber.skillingtoolkit;
 
 import java.time.LocalDate;
 import java.time.temporal.WeekFields;
-import java.util.Locale;
 
 enum SkillingToolkitStatsPeriod
 {
@@ -46,6 +45,6 @@ enum SkillingToolkitStatsPeriod
 	@Override
 	public String toString()
 	{
-		return displayName.toLowerCase(Locale.ENGLISH);
+		return displayName;
 	}
 }

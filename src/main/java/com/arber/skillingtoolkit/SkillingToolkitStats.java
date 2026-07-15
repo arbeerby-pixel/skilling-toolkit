@@ -10,7 +10,12 @@ class SkillingToolkitStats
 	private long profitValue;
 	private long costValue;
 	private long actions;
+	private long birdhouseRuns;
+	private long birdhouseNests;
+	private long birdhouseNestValue;
+	private long birdhouseXp;
 	private final EnumMap<Skill, Long> xpBySkill = new EnumMap<>(Skill.class);
+	private final EnumMap<FarmingActivityType, FarmingActivityStats> farmingStatsByType = new EnumMap<>(FarmingActivityType.class);
 
 	SkillingToolkitStats(String periodId)
 	{
@@ -18,6 +23,10 @@ class SkillingToolkitStats
 		for (Skill skill : SkillingToolkitPlugin.SKILLING_TRACKER_SKILLS)
 		{
 			xpBySkill.put(skill, 0L);
+		}
+		for (FarmingActivityType type : FarmingActivityType.values())
+		{
+			farmingStatsByType.put(type, new FarmingActivityStats());
 		}
 	}
 
@@ -51,8 +60,23 @@ class SkillingToolkitStats
 				case "actions":
 					stats.actions = parseLong(parts[1]);
 					break;
+				case "birdhouseRuns":
+					stats.birdhouseRuns = parseLong(parts[1]);
+					break;
+				case "birdhouseNests":
+					stats.birdhouseNests = parseLong(parts[1]);
+					break;
+				case "birdhouseNestValue":
+					stats.birdhouseNestValue = parseLong(parts[1]);
+					break;
+				case "birdhouseXp":
+					stats.birdhouseXp = parseLong(parts[1]);
+					break;
 				case "xp":
 					stats.parseXp(parts[1]);
+					break;
+				default:
+					stats.parseFarmingStats(parts[0], parts[1]);
 					break;
 			}
 		}
@@ -76,7 +100,15 @@ class SkillingToolkitStats
 		copy.profitValue = profitValue;
 		copy.costValue = costValue;
 		copy.actions = actions;
+		copy.birdhouseRuns = birdhouseRuns;
+		copy.birdhouseNests = birdhouseNests;
+		copy.birdhouseNestValue = birdhouseNestValue;
+		copy.birdhouseXp = birdhouseXp;
 		copy.xpBySkill.putAll(xpBySkill);
+		for (Map.Entry<FarmingActivityType, FarmingActivityStats> entry : farmingStatsByType.entrySet())
+		{
+			copy.farmingStatsByType.put(entry.getKey(), entry.getValue().copy());
+		}
 		return copy;
 	}
 
@@ -97,6 +129,11 @@ class SkillingToolkitStats
 			+ ";profit=" + profitValue
 			+ ";cost=" + costValue
 			+ ";actions=" + actions
+			+ ";birdhouseRuns=" + birdhouseRuns
+			+ ";birdhouseNests=" + birdhouseNests
+			+ ";birdhouseNestValue=" + birdhouseNestValue
+			+ ";birdhouseXp=" + birdhouseXp
+			+ serializeFarmingStats()
 			+ ";xp=" + xp;
 	}
 
@@ -152,6 +189,12 @@ class SkillingToolkitStats
 		costValue += Math.max(0L, value);
 	}
 
+	void resetGp()
+	{
+		profitValue = 0L;
+		costValue = 0L;
+	}
+
 	boolean ensureCostAtLeast(long value)
 	{
 		value = Math.max(0L, value);
@@ -167,6 +210,27 @@ class SkillingToolkitStats
 	void addAction()
 	{
 		actions++;
+	}
+
+	void addBirdhouseLoot(long nests, long nestValue, boolean countRun)
+	{
+		if (countRun)
+		{
+			birdhouseRuns++;
+		}
+
+		birdhouseNests += Math.max(0L, nests);
+		birdhouseNestValue += Math.max(0L, nestValue);
+	}
+
+	void addBirdhouseXp(long xp)
+	{
+		birdhouseXp += Math.max(0L, xp);
+	}
+
+	void addFarmingActivity(FarmingActivityType type, long seedsUsed, long seedCost, long harvested, long harvestValue, boolean countRun)
+	{
+		farmingStatsByType.get(type).add(seedsUsed, seedCost, harvested, harvestValue, countRun);
 	}
 
 	boolean ensureActionsAtLeast(long value)
@@ -238,6 +302,45 @@ class SkillingToolkitStats
 		return actions;
 	}
 
+	long getBirdhouseRuns()
+	{
+		return birdhouseRuns;
+	}
+
+	long getBirdhouseNests()
+	{
+		return birdhouseNests;
+	}
+
+	long getBirdhouseNestValue()
+	{
+		return birdhouseNestValue;
+	}
+
+	long getBirdhouseXp()
+	{
+		return birdhouseXp;
+	}
+
+	long getActiveSkillCount()
+	{
+		long count = 0L;
+		for (long xp : xpBySkill.values())
+		{
+			if (xp > 0)
+			{
+				count++;
+			}
+		}
+
+		return count;
+	}
+
+	FarmingActivityStats getFarmingActivityStats(FarmingActivityType type)
+	{
+		return farmingStatsByType.get(type).copy();
+	}
+
 	private void parseXp(String value)
 	{
 		if (value == null || value.isBlank())
@@ -264,6 +367,31 @@ class SkillingToolkitStats
 			catch (IllegalArgumentException ignored)
 			{
 				// Ignore stale or manually edited values.
+			}
+		}
+	}
+
+	private String serializeFarmingStats()
+	{
+		StringBuilder serialized = new StringBuilder();
+		for (FarmingActivityType type : FarmingActivityType.values())
+		{
+			serialized.append(';')
+				.append(type.getKey())
+				.append('=')
+				.append(farmingStatsByType.get(type).serialize());
+		}
+		return serialized.toString();
+	}
+
+	private void parseFarmingStats(String key, String value)
+	{
+		for (FarmingActivityType type : FarmingActivityType.values())
+		{
+			if (type.getKey().equals(key))
+			{
+				farmingStatsByType.get(type).deserialize(value);
+				return;
 			}
 		}
 	}

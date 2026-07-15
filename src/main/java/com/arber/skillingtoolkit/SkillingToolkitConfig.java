@@ -178,11 +178,23 @@ public interface SkillingToolkitConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "showHerbSackViewer",
+		name = "Herb sack viewer",
+		description = "Show the last checked herb sack contents and estimated value when hovering the herb sack.",
+		section = interfaceSection,
+		position = 2
+	)
+	default boolean showHerbSackViewer()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "priceSource",
 		name = "Value price source",
 		description = "Choose the prices used for inventory value and value trackers.",
 		section = interfaceSection,
-		position = 2
+		position = 3
 	)
 	default ToolkitPriceSource priceSource()
 	{

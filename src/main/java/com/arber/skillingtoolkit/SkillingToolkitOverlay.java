@@ -9,7 +9,9 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.ItemID;
@@ -36,6 +38,7 @@ class SkillingToolkitOverlay extends Overlay
 	private static final int PATCH_TIMER_BOX_HORIZONTAL_PADDING = 5;
 	private static final int PATCH_TIMER_BOX_VERTICAL_PADDING = 2;
 	private static final int PATCH_TIMER_BOX_RADIUS = 5;
+	private static final int COMPOST_MARKER_MERGE_DISTANCE = 5;
 	private static final Color PROTECTION_CHECK_COLOR = new Color(60, 255, 90);
 	private static final Color PROTECTION_CHECK_SHADOW = new Color(0, 0, 0, 190);
 	private static final Color PATCH_TIMER_COLOR = new Color(255, 220, 80);
@@ -80,22 +83,29 @@ class SkillingToolkitOverlay extends Overlay
 			}
 		}
 
-		if (config.showCompostIndicator())
+		if (config.showCompostIndicator() && plugin.shouldRenderOwnCompostIndicators())
 		{
+			Set<WorldPoint> renderedCompostMarkers = new HashSet<>();
+			for (Map.Entry<WorldPoint, CompostPatch> entry : plugin.getCompostedPatches().entrySet())
+			{
+				WorldPoint patchPoint = entry.getKey();
+				if (!hasNearbyMarker(renderedCompostMarkers, patchPoint))
+				{
+					renderPatch(graphics, entry.getValue());
+					renderedCompostMarkers.add(patchPoint);
+				}
+			}
+
 			if (config.showNeedsCompostIcon())
 			{
 				for (WorldPoint patchPoint : plugin.getNeedsCompostPatches())
 				{
-					if (!plugin.getCompostedPatches().containsKey(patchPoint))
+					if (!hasNearbyMarker(renderedCompostMarkers, patchPoint))
 					{
 						renderCompostIcon(graphics, patchPoint, getNeedsCompostIcon());
+						renderedCompostMarkers.add(patchPoint);
 					}
 				}
-			}
-
-			for (Map.Entry<WorldPoint, CompostPatch> entry : plugin.getCompostedPatches().entrySet())
-			{
-				renderPatch(graphics, entry.getValue());
 			}
 		}
 
@@ -118,14 +128,31 @@ class SkillingToolkitOverlay extends Overlay
 		return null;
 	}
 
+	static boolean hasNearbyMarker(Set<WorldPoint> renderedMarkers, WorldPoint candidate)
+	{
+		for (WorldPoint marker : renderedMarkers)
+		{
+			if (marker.getPlane() == candidate.getPlane()
+				&& marker.distanceTo(candidate) <= COMPOST_MARKER_MERGE_DISTANCE)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	private void renderPatch(Graphics2D graphics, CompostPatch patch)
 	{
-		renderCompostIcon(graphics, patch.getWorldPoint(), getCompostIcon());
+		if (config.showCompostIcon())
+		{
+			renderCompostIcon(graphics, patch.getWorldPoint(), getCompostIcon());
+		}
 	}
 
 	private void renderCompostIcon(Graphics2D graphics, WorldPoint worldPoint, BufferedImage icon)
 	{
-		if (!config.showCompostIcon() || icon == null)
+		if (icon == null)
 		{
 			return;
 		}

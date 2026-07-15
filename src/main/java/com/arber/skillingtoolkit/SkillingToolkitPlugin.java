@@ -16,6 +16,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.IntFunction;
+import java.util.function.IntUnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
@@ -68,8 +70,8 @@ import net.runelite.client.util.Text;
 @PluginDescriptor(
 	name = "Skilling Toolkit",
 	configName = SkillingToolkitConfig.GROUP,
-	description = "Adds Farming and Hunter helpers, skilling trackers, an inventory counter, and a Trade-tab clock.",
-	tags = {"skilling", "farming", "compost", "protection", "birdhouse", "hunter", "tracker", "xp", "profit", "cost", "clock", "inventory"}
+	description = "Adds Farming and Hunter helpers, skilling trackers, inventory helpers, and a Trade-tab clock.",
+	tags = {"skilling", "farming", "compost", "protection", "birdhouse", "hunter", "herb", "sack", "tracker", "xp", "profit", "cost", "clock", "inventory"}
 )
 public class SkillingToolkitPlugin extends Plugin
 {
@@ -78,6 +80,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final int PATCH_READY_CLEAR_DISTANCE = 5;
 	private static final int TRACKED_PATCH_NORMALIZE_DISTANCE = 5;
 	private static final int KNOWN_PATCH_NORMALIZE_DISTANCE = 3;
+	private static final int PROTECTION_PAYMENT_FALLBACK_DISTANCE = 10;
 	private static final int HARVEST_SCENE_SCAN_INTERVAL = 5;
 	private static final int INVENTORY_SIZE = 28;
 	private static final int INVENTORY_TRACKER_IGNORE_TICKS = 10;
@@ -86,6 +89,11 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final int PENDING_HERB_CLEANING_TICKS = 4;
 	private static final int ACTIVE_SKILL_INVENTORY_TICKS = 8;
 	private static final int SUSPICIOUS_EMPTY_INVENTORY_ITEM_TYPES = 8;
+	private static final long SUSPICIOUS_VALUE_REPLACEMENT_MIN_GP = 1_000_000L;
+	private static final long SUSPICIOUS_VALUE_REPLACEMENT_VERY_LARGE_GP = 5_000_000L;
+	private static final int SUSPICIOUS_VALUE_REPLACEMENT_MIN_TYPES = 2;
+	private static final int SUSPICIOUS_VALUE_REPLACEMENT_CLOSE_PERCENT = 85;
+	private static final Pattern CHARGED_ITEM_NAME = Pattern.compile("^(.+?)\\s*\\((\\d+)\\)$");
 	private static final int TOOLKIT_NAVIGATION_PRIORITY = 1;
 	private static final int TOOLKIT_NAVIGATION_ICON_SIZE = 24;
 	private static final int PROFIT_TRACKER_COLOR = 0x00FF00;
@@ -120,8 +128,11 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
 	private static final String SKILLING_PLUGIN_CLASS_NAME = "com.arber.skillingtoolkit.SkillingToolkitPlugin";
 	private static final String PVM_PLUGIN_CLASS_NAME = "com.arber.prayerpottimer.CombatPotionTimersPlugin";
+	private static final int TOOLKIT_UI_OWNER_GRACE_TICKS = 2;
+	private static final String DID_I_COMPOST_PLUGIN_CLASS_NAME = "com.compost.DidICompostPlugin";
 	private static final DateTimeFormatter TRADE_CLOCK_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 	private static final int PATCH_TIMER_INTERACTION_TICK_WINDOW = 12;
+	private static final int FARMING_STATS_INTERACTION_TICK_WINDOW = 150;
 	private static final int ANIMA_PATCH_VARBIT = 7911;
 	private static final int ANIMA_STAGE_COUNT = 9;
 	private static final int ANIMA_STAGE_MINUTES = 640;
@@ -146,8 +157,12 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final Pattern CLEAR_BELLADONNA = Pattern.compile("you pick some deadly nightshade.*");
 	private static final Pattern CLEAR_MUSHROOM = Pattern.compile("you pick a bittercap mushroom.*");
 	private static final int BIRDHOUSE_INTERACTION_TICK_WINDOW = 150;
+	private static final int BIRDHOUSE_XP_INTERACTION_TICK_WINDOW = 12;
 	private static final int TRACKED_BIRDHOUSE_NORMALIZE_DISTANCE = 4;
 	private static final long BIRDHOUSE_DURATION_MILLIS = 50L * 60_000L;
+	private static final long BIRDHOUSE_STATS_RUN_GROUP_MILLIS = 10L * 60_000L;
+	private static final long FARMING_STATS_RUN_GROUP_MILLIS = 15L * 60_000L;
+	private static final int HERB_SACK_CHECK_TIMEOUT_TICKS = 4;
 
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -218,14 +233,22 @@ public class SkillingToolkitPlugin extends Plugin
 		"cadantine",
 		"cadavaberry",
 		"calquat",
+		"calquat fruit",
 		"cactus",
+		"cactus spine",
 		"celastrus",
+		"coconut",
+		"cooking apple",
 		"crystal tree",
+		"curry leaf",
+		"curry leaves",
 		"curry tree",
 		"diseased",
+		"dragonfruit",
 		"dragonfruit tree",
 		"dwarf weed",
 		"dwellberry",
+		"dwellberries",
 		"flower",
 		"grapevine",
 		"guam",
@@ -237,6 +260,7 @@ public class SkillingToolkitPlugin extends Plugin
 		"hops",
 		"irit",
 		"jangerberry",
+		"jangerberries",
 		"jute",
 		"krandorian hops",
 		"kwuarm",
@@ -254,11 +278,15 @@ public class SkillingToolkitPlugin extends Plugin
 		"orange tree",
 		"palm tree",
 		"papaya tree",
+		"papaya fruit",
 		"pineapple plant",
+		"poison ivy berries",
 		"poison ivy",
 		"potato",
+		"potato cactus",
 		"ranarr",
 		"redberry",
+		"redberries",
 		"redwood",
 		"rosemary",
 		"sapling",
@@ -276,7 +304,9 @@ public class SkillingToolkitPlugin extends Plugin
 		"torstol",
 		"watermelon",
 		"whiteberry",
+		"white berries",
 		"white lily",
+		"white tree fruit",
 		"wildblood hops",
 		"willow tree",
 		"woad",
@@ -301,7 +331,104 @@ public class SkillingToolkitPlugin extends Plugin
 	};
 
 	private static final Map<String, PatchGrowthInfo> PATCH_GROWTH_TIMES = createPatchGrowthTimes();
-
+	private static final Set<Integer> HERB_SEED_ITEMS = immutableItemSet(
+		ItemID.GUAM_SEED,
+		ItemID.MARRENTILL_SEED,
+		ItemID.TARROMIN_SEED,
+		ItemID.HARRALANDER_SEED,
+		ItemID.RANARR_SEED,
+		ItemID.TOADFLAX_SEED,
+		ItemID.IRIT_SEED,
+		ItemID.AVANTOE_SEED,
+		ItemID.KWUARM_SEED,
+		ItemID.SNAPDRAGON_SEED,
+		ItemID.CADANTINE_SEED,
+		ItemID.LANTADYME_SEED,
+		ItemID.DWARF_WEED_SEED,
+		ItemID.TORSTOL_SEED,
+		ItemID.NOXIFER_SEED,
+		ItemID.GOLPAR_SEED,
+		ItemID.BUCHU_SEED,
+		ItemID.HUASCA_SEED
+	);
+	private static final Set<Integer> HERB_HARVEST_ITEMS = immutableItemSet(
+		ItemID.GRIMY_GUAM_LEAF,
+		ItemID.GUAM_LEAF,
+		ItemID.GRIMY_MARRENTILL,
+		ItemID.MARRENTILL,
+		ItemID.GRIMY_TARROMIN,
+		ItemID.TARROMIN,
+		ItemID.GRIMY_HARRALANDER,
+		ItemID.HARRALANDER,
+		ItemID.GRIMY_RANARR_WEED,
+		ItemID.RANARR_WEED,
+		ItemID.GRIMY_TOADFLAX,
+		ItemID.TOADFLAX,
+		ItemID.GRIMY_IRIT_LEAF,
+		ItemID.IRIT_LEAF,
+		ItemID.GRIMY_AVANTOE,
+		ItemID.AVANTOE,
+		ItemID.GRIMY_KWUARM,
+		ItemID.KWUARM,
+		ItemID.GRIMY_SNAPDRAGON,
+		ItemID.SNAPDRAGON,
+		ItemID.GRIMY_CADANTINE,
+		ItemID.CADANTINE,
+		ItemID.GRIMY_LANTADYME,
+		ItemID.LANTADYME,
+		ItemID.GRIMY_DWARF_WEED,
+		ItemID.DWARF_WEED,
+		ItemID.GRIMY_TORSTOL,
+		ItemID.TORSTOL,
+		ItemID.GRIMY_NOXIFER,
+		ItemID.NOXIFER,
+		ItemID.GRIMY_GOLPAR,
+		ItemID.GOLPAR,
+		ItemID.GRIMY_BUCHU_LEAF,
+		ItemID.BUCHU_LEAF,
+		ItemID.GRIMY_HUASCA,
+		ItemID.HUASCA
+	);
+	private static final Set<Integer> ALLOTMENT_SEED_ITEMS = immutableItemSet(
+		ItemID.POTATO_SEED,
+		ItemID.ONION_SEED,
+		ItemID.CABBAGE_SEED,
+		ItemID.TOMATO_SEED,
+		ItemID.SWEETCORN_SEED,
+		ItemID.STRAWBERRY_SEED,
+		ItemID.WATERMELON_SEED,
+		ItemID.SNAPE_GRASS_SEED
+	);
+	private static final Set<Integer> ALLOTMENT_HARVEST_ITEMS = immutableItemSet(
+		ItemID.POTATO,
+		ItemID.ONION,
+		ItemID.CABBAGE,
+		ItemID.TOMATO,
+		ItemID.SWEETCORN,
+		ItemID.STRAWBERRY,
+		ItemID.WATERMELON,
+		ItemID.SNAPE_GRASS
+	);
+	private static final Set<Integer> HOPS_SEED_ITEMS = immutableItemSet(
+		ItemID.BARLEY_SEED,
+		ItemID.HAMMERSTONE_SEED,
+		ItemID.ASGARNIAN_SEED,
+		ItemID.JUTE_SEED,
+		ItemID.YANILLIAN_SEED,
+		ItemID.KRANDORIAN_SEED,
+		ItemID.WILDBLOOD_SEED,
+		ItemID.KELDA_SEED
+	);
+	private static final Set<Integer> HOPS_HARVEST_ITEMS = immutableItemSet(
+		ItemID.BARLEY,
+		ItemID.HAMMERSTONE_HOPS,
+		ItemID.ASGARNIAN_HOPS,
+		ItemID.JUTE_FIBRE,
+		ItemID.YANILLIAN_HOPS,
+		ItemID.KRANDORIAN_HOPS,
+		ItemID.WILDBLOOD_HOPS,
+		ItemID.KELDA_HOPS
+	);
 	private final Map<WorldPoint, CompostPatch> compostedPatches = new HashMap<>();
 	private final Set<WorldPoint> needsCompostPatches = new HashSet<>();
 	private final Map<WorldPoint, Integer> protectedPatches = new HashMap<>();
@@ -321,11 +448,14 @@ public class SkillingToolkitPlugin extends Plugin
 	private final EnumMap<Skill, Integer> trackerBaseExperience = new EnumMap<>(Skill.class);
 	private final EnumMap<Skill, Long> xpGainedBySkill = new EnumMap<>(Skill.class);
 	private final EnumMap<SkillingToolkitStatsPeriod, SkillingToolkitStats> statsByPeriod = new EnumMap<>(SkillingToolkitStatsPeriod.class);
+	private final EnumMap<FarmingActivityType, Long> lastFarmingStatsRunAtMillis = new EnumMap<>(FarmingActivityType.class);
 	private final Map<Integer, Long> lastInventoryQuantities = new HashMap<>();
 	private final Map<Integer, Long> ignoredInventoryReturns = new HashMap<>();
 	private final Map<Integer, Integer> ignoredInventoryReturnExpiryTicks = new HashMap<>();
 	private final List<PendingInventoryValueChange> pendingInventoryValueChanges = new ArrayList<>();
 	private final List<PendingHerbCleaning> pendingHerbCleanings = new ArrayList<>();
+	private final HerbSackContents herbSackContents = new HerbSackContents();
+	private final EnumMap<HerbSackHerb, Integer> pendingHerbSackQuantities = new EnumMap<>(HerbSackHerb.class);
 
 	@Inject
 	private Client client;
@@ -357,6 +487,9 @@ public class SkillingToolkitPlugin extends Plugin
 	@Inject
 	private SkillingToolkitOverlay overlay;
 
+	@Inject
+	private HerbSackOverlay herbSackOverlay;
+
 	private InventorySpacesInfoBox inventorySpacesInfoBox;
 	private SkillingToolkitPanel toolkitPanel;
 	private NavigationButton toolkitNavigationButton;
@@ -366,6 +499,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private int lastPatchInteractionTick;
 	private WorldPoint lastBirdhouseInteraction;
 	private int lastBirdhouseInteractionTick;
+	private long lastBirdhouseStatsRunAtMillis;
 	private WorldPoint lastProtectionInteraction;
 	private WorldPoint lastProtectionPatchCandidate;
 	private int lastProtectionInteractionTick;
@@ -375,8 +509,11 @@ public class SkillingToolkitPlugin extends Plugin
 	private boolean trackerValuesLoaded;
 	private boolean inventoryTrackerBaselineReady;
 	private int inventoryTrackerIgnoreTicks;
+	private int pendingEquipmentTransferTick = Integer.MIN_VALUE;
 	private Skill activeSkillingSkill;
 	private int lastSkillingXpTick = Integer.MIN_VALUE;
+	private boolean readingHerbSackContents;
+	private int herbSackCheckTick = Integer.MIN_VALUE;
 	private long profitValue;
 	private long costValue;
 	private long actionsValue;
@@ -453,6 +590,12 @@ public class SkillingToolkitPlugin extends Plugin
 	protected void startUp()
 	{
 		overlayManager.add(overlay);
+		overlayManager.add(herbSackOverlay);
+		if (isLoggedIn())
+		{
+			ignoreInventoryTrackingBriefly();
+			syncInventoryTrackerBaseline();
+		}
 		loadCompostPatches();
 		loadNeedsCompostPatches();
 		loadProtectedPatches();
@@ -467,6 +610,7 @@ public class SkillingToolkitPlugin extends Plugin
 	protected void shutDown()
 	{
 		overlayManager.remove(overlay);
+		overlayManager.remove(herbSackOverlay);
 		removeToolkitNavigation();
 		removeInventoryInfoBox();
 		restoreChatTabOverridesLater();
@@ -479,6 +623,7 @@ public class SkillingToolkitPlugin extends Plugin
 		currentCompostPatch = null;
 		lastPatchInteraction = null;
 		lastBirdhouseInteraction = null;
+		lastBirdhouseStatsRunAtMillis = 0L;
 		lastProtectionInteraction = null;
 		lastProtectionPatchCandidate = null;
 		lastProtectionPatchNumber = -1;
@@ -491,8 +636,12 @@ public class SkillingToolkitPlugin extends Plugin
 		ignoredInventoryReturnExpiryTicks.clear();
 		pendingInventoryValueChanges.clear();
 		pendingHerbCleanings.clear();
+		lastFarmingStatsRunAtMillis.clear();
+		pendingEquipmentTransferTick = Integer.MIN_VALUE;
 		activeSkillingSkill = null;
 		lastSkillingXpTick = Integer.MIN_VALUE;
+		resetPendingHerbSackCheck();
+		herbSackContents.forget();
 		inventoryTrackerBaselineReady = false;
 	}
 
@@ -542,6 +691,7 @@ public class SkillingToolkitPlugin extends Plugin
 	{
 		if (event.getGameState() == GameState.LOGGED_IN)
 		{
+			ignoreInventoryTrackingBriefly();
 			syncTrackerSkillBaselines();
 			syncInventoryInfoBox();
 			syncInventoryTrackerBaseline();
@@ -568,8 +718,11 @@ public class SkillingToolkitPlugin extends Plugin
 			ignoredInventoryReturnExpiryTicks.clear();
 			pendingInventoryValueChanges.clear();
 			pendingHerbCleanings.clear();
+			lastFarmingStatsRunAtMillis.clear();
+			pendingEquipmentTransferTick = Integer.MIN_VALUE;
 			activeSkillingSkill = null;
 			lastSkillingXpTick = Integer.MIN_VALUE;
+			resetPendingHerbSackCheck();
 			inventoryTrackerBaselineReady = false;
 		}
 	}
@@ -601,6 +754,7 @@ public class SkillingToolkitPlugin extends Plugin
 		pruneReadyBirdhouses();
 		pruneExpiredPatchTimers();
 		syncVisibleAnimaPatchTimer();
+		finishPendingHerbSackCheckIfReady();
 		syncInventoryInfoBox();
 		syncTrackerSkillBaselines();
 		detectCropProtectionDialog();
@@ -652,11 +806,20 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
+		recordHerbSackCheck(event);
 		recordProtectionPaymentSelection(event);
 		recordCompostPatchSelection(event);
+		if (isEquipmentTransferInteraction(event))
+		{
+			pendingEquipmentTransferTick = tickCount;
+		}
+		boolean farmingWorldInteraction = isFarmingWorldInteraction(event.getMenuAction());
 		String target = cleanFarmingText(event.getMenuTarget());
-		boolean farmingMenuTarget = isFarmingPatchName(target) || isFarmingCropName(target) || isAnimaPatchText(target);
-		FarmingPatch menuPatch = resolveMenuPatch(event.getId(), event.getParam0(), event.getParam1(), farmingMenuTarget);
+		boolean farmingMenuTarget = farmingWorldInteraction
+			&& (isFarmingPatchName(target) || isFarmingCropName(target) || isAnimaPatchText(target));
+		FarmingPatch menuPatch = farmingWorldInteraction
+			? resolveMenuPatch(event.getId(), event.getParam0(), event.getParam1(), farmingMenuTarget)
+			: null;
 		if (menuPatch != null)
 		{
 			currentFarmingPatch = menuPatch;
@@ -671,21 +834,13 @@ public class SkillingToolkitPlugin extends Plugin
 			ignoreInventoryTrackingBriefly();
 		}
 
-		if (config.showBirdhouseSeedIndicator())
-		{
-			recordBirdhouseInteraction(event);
-		}
+		recordBirdhouseInteraction(event);
 
 		clearReadyPatchMarkerFromMenu(event.getMenuOption(), event.getMenuTarget(), event.getParam0(), event.getParam1(), menuPatch);
 
 		if (isProtectionPaymentInteraction(event))
 		{
 			rememberProtectionInteraction(menuPatch);
-		}
-
-		if (!config.showCompostIndicator() && !config.showCropProtectionIndicator() && !config.showPatchTimers())
-		{
-			return;
 		}
 
 		if (menuPatch == null && !farmingMenuTarget)
@@ -704,6 +859,11 @@ public class SkillingToolkitPlugin extends Plugin
 		markSkillingActivity();
 		lastPatchInteraction = normalizeToKnownPatchPoint(point);
 		lastPatchInteractionTick = tickCount;
+
+		if (!config.showCompostIndicator() && !config.showCropProtectionIndicator() && !config.showPatchTimers())
+		{
+			return;
+		}
 	}
 
 	@Subscribe
@@ -715,6 +875,8 @@ public class SkillingToolkitPlugin extends Plugin
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
+		handleHerbSackChatMessage(event);
+
 		if (!isFarmingStatusMessageType(event.getType())
 			|| (!config.showCompostIndicator()
 				&& !config.showCropProtectionIndicator()
@@ -741,7 +903,7 @@ public class SkillingToolkitPlugin extends Plugin
 		if (config.showCropProtectionIndicator() && isCropProtectionMessage(message))
 		{
 			markSkillingActivity();
-			markProtectedPatch();
+			markProtectedPatch(true);
 		}
 
 		if (config.showCompostIndicator() && isPatchNeedsCompostMessage(message))
@@ -829,6 +991,11 @@ public class SkillingToolkitPlugin extends Plugin
 	Set<WorldPoint> getNeedsCompostPatches()
 	{
 		return needsCompostPatches;
+	}
+
+	boolean shouldRenderOwnCompostIndicators()
+	{
+		return !isToolkitPluginEnabled(DID_I_COMPOST_PLUGIN_CLASS_NAME);
 	}
 
 	Map<WorldPoint, Integer> getProtectedPatches()
@@ -956,10 +1123,8 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
-		if (shouldIgnoreInventoryValueChange() || isSuspiciousEmptyInventoryRefresh(currentQuantities))
+		if (shouldIgnoreEquipmentTransferChange())
 		{
-			recordIgnoredInventoryMovement(lastInventoryQuantities, currentQuantities);
-			pendingInventoryValueChanges.clear();
 			lastInventoryQuantities.clear();
 			lastInventoryQuantities.putAll(currentQuantities);
 			return;
@@ -991,12 +1156,39 @@ public class SkillingToolkitPlugin extends Plugin
 			}
 		}
 
+		if (shouldIgnoreInventoryValueChange() || isSuspiciousEmptyInventoryRefresh(currentQuantities))
+		{
+			recordIgnoredInventoryMovement(lastInventoryQuantities, currentQuantities);
+			pendingInventoryValueChanges.clear();
+			lastInventoryQuantities.clear();
+			lastInventoryQuantities.putAll(currentQuantities);
+			return;
+		}
+
 		markBirdhouseSeededFromInventoryChange(spentQuantities);
 		markPatchTimerFromInventoryChange(spentQuantities);
 		neutralizeCleanedHerbChanges(gainedQuantities, spentQuantities);
-		long gainedValue = getGainedInventoryChangeValue(gainedQuantities);
-		long spentValue = getSpentInventoryChangeValue(spentQuantities);
-		queueOrCommitInventoryValueChange(gainedValue, spentValue);
+		neutralizeBirdHouseCrafting(gainedQuantities, spentQuantities);
+		recordBirdhouseLootStats(gainedQuantities, spentQuantities);
+		neutralizeOpenedBirdNestChanges(gainedQuantities, spentQuantities, this::getItemName);
+		recordFarmingActivityStats(gainedQuantities, spentQuantities);
+		InventoryValueAdjustment chargedItemAdjustment = neutralizeChargedItemChanges(
+			gainedQuantities,
+			spentQuantities,
+			this::getExactItemPrice,
+			this::getItemName
+		);
+		long gainedValue = chargedItemAdjustment.gainedValue + getGainedInventoryChangeValue(gainedQuantities);
+		long spentValue = chargedItemAdjustment.spentValue + getSpentInventoryChangeValue(spentQuantities);
+		if (shouldIgnoreSuspiciousInventoryValueChange(gainedQuantities, spentQuantities, gainedValue, spentValue))
+		{
+			pendingInventoryValueChanges.clear();
+			lastInventoryQuantities.clear();
+			lastInventoryQuantities.putAll(currentQuantities);
+			return;
+		}
+
+		queueOrCommitInventoryValueChange(gainedValue, spentValue, false);
 
 		lastInventoryQuantities.clear();
 		lastInventoryQuantities.putAll(currentQuantities);
@@ -1077,6 +1269,174 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 	}
 
+	static void neutralizeBirdHouseCrafting(Map<Integer, Long> gainedQuantities, Map<Integer, Long> spentQuantities)
+	{
+		for (Map.Entry<Integer, Long> entry : new ArrayList<>(gainedQuantities.entrySet()))
+		{
+			int logId = getBirdHouseLogId(entry.getKey());
+			if (logId == -1)
+			{
+				continue;
+			}
+
+			long craftedQuantity = Math.min(entry.getValue(), spentQuantities.getOrDefault(logId, 0L));
+			craftedQuantity = Math.min(craftedQuantity, spentQuantities.getOrDefault(ItemID.CLOCKWORK, 0L));
+			if (craftedQuantity <= 0)
+			{
+				continue;
+			}
+
+			subtractQuantity(gainedQuantities, entry.getKey(), craftedQuantity);
+			subtractQuantity(spentQuantities, logId, craftedQuantity);
+			subtractQuantity(spentQuantities, ItemID.CLOCKWORK, craftedQuantity);
+		}
+	}
+
+	static void neutralizeOpenedBirdNestChanges(
+		Map<Integer, Long> gainedQuantities,
+		Map<Integer, Long> spentQuantities,
+		IntFunction<String> itemName)
+	{
+		long openedNests = 0L;
+		for (Map.Entry<Integer, Long> entry : new ArrayList<>(spentQuantities.entrySet()))
+		{
+			if (isBirdNestItemName(itemName.apply(entry.getKey())))
+			{
+				openedNests += Math.max(0L, entry.getValue());
+				spentQuantities.remove(entry.getKey());
+			}
+		}
+
+		if (openedNests <= 0 || gainedQuantities.isEmpty())
+		{
+			return;
+		}
+
+		for (Map.Entry<Integer, Long> entry : new ArrayList<>(gainedQuantities.entrySet()))
+		{
+			if (isBirdNestOpeningOutputName(itemName.apply(entry.getKey())))
+			{
+				gainedQuantities.remove(entry.getKey());
+			}
+		}
+	}
+
+	static InventoryValueAdjustment neutralizeChargedItemChanges(
+		Map<Integer, Long> gainedQuantities,
+		Map<Integer, Long> spentQuantities,
+		IntUnaryOperator exactPrice,
+		IntFunction<String> itemName)
+	{
+		long gainedValue = 0L;
+		long spentValue = 0L;
+		for (int spentItemId : new ArrayList<>(spentQuantities.keySet()))
+		{
+			ChargedItemVariant spentVariant = parseChargedItemVariant(itemName.apply(spentItemId));
+			if (spentVariant == null)
+			{
+				continue;
+			}
+
+			for (int gainedItemId : new ArrayList<>(gainedQuantities.keySet()))
+			{
+				long remainingSpent = spentQuantities.getOrDefault(spentItemId, 0L);
+				if (remainingSpent <= 0)
+				{
+					break;
+				}
+				long remainingGained = gainedQuantities.getOrDefault(gainedItemId, 0L);
+				if (remainingGained <= 0)
+				{
+					continue;
+				}
+				long quantity = Math.min(remainingSpent, remainingGained);
+
+				ChargedItemVariant gainedVariant = parseChargedItemVariant(itemName.apply(gainedItemId));
+				if (gainedVariant == null
+					|| !spentVariant.baseName.equals(gainedVariant.baseName)
+					|| spentVariant.charges == gainedVariant.charges)
+				{
+					continue;
+				}
+
+				long valueDifference = getChargedItemValueDifference(
+					exactPrice.applyAsInt(spentItemId),
+					exactPrice.applyAsInt(gainedItemId),
+					spentVariant.charges,
+					gainedVariant.charges,
+					quantity
+				);
+				if (spentVariant.charges > gainedVariant.charges)
+				{
+					spentValue += valueDifference;
+				}
+				else
+				{
+					gainedValue += valueDifference;
+				}
+
+				subtractQuantity(spentQuantities, spentItemId, quantity);
+				subtractQuantity(gainedQuantities, gainedItemId, quantity);
+			}
+		}
+
+		return new InventoryValueAdjustment(gainedValue, spentValue);
+	}
+
+	private static ChargedItemVariant parseChargedItemVariant(String itemName)
+	{
+		if (itemName == null)
+		{
+			return null;
+		}
+
+		Matcher matcher = CHARGED_ITEM_NAME.matcher(itemName.trim());
+		if (!matcher.matches())
+		{
+			String baseName = itemName.trim().toLowerCase(Locale.ROOT);
+			return baseName.isEmpty() ? null : new ChargedItemVariant(baseName, 0);
+		}
+
+		try
+		{
+			return new ChargedItemVariant(
+				matcher.group(1).trim().toLowerCase(Locale.ROOT),
+				Integer.parseInt(matcher.group(2))
+			);
+		}
+		catch (NumberFormatException ignored)
+		{
+			return null;
+		}
+	}
+
+	private static long getChargedItemValueDifference(
+		int spentPrice,
+		int gainedPrice,
+		int spentCharges,
+		int gainedCharges,
+		long quantity)
+	{
+		long exactDifference = spentCharges > gainedCharges
+			? (long) spentPrice - gainedPrice
+			: (long) gainedPrice - spentPrice;
+		if (spentPrice > 0 && gainedPrice > 0 && exactDifference > 0)
+		{
+			return exactDifference * quantity;
+		}
+
+		int knownPrice = spentPrice > 0 ? spentPrice : gainedPrice;
+		int knownCharges = spentPrice > 0 ? spentCharges : gainedCharges;
+		if (knownPrice <= 0 || knownCharges <= 0)
+		{
+			return 0L;
+		}
+
+		long changedCharges = Math.abs((long) spentCharges - gainedCharges);
+		long estimatedValue = ((long) knownPrice * changedCharges + knownCharges - 1L) / knownCharges;
+		return estimatedValue * quantity;
+	}
+
 	private void cleanupPendingHerbCleanings()
 	{
 		pendingHerbCleanings.removeIf(cleaning -> tickCount - cleaning.tick > PENDING_HERB_CLEANING_TICKS);
@@ -1102,6 +1462,59 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 
 		return value;
+	}
+
+	private boolean shouldIgnoreSuspiciousInventoryValueChange(
+		Map<Integer, Long> gainedQuantities,
+		Map<Integer, Long> spentQuantities,
+		long gainedValue,
+		long spentValue)
+	{
+		return isSuspiciousInventoryValueReplacement(
+			gainedValue,
+			spentValue,
+			countPositiveItemTypes(gainedQuantities),
+			countPositiveItemTypes(spentQuantities));
+	}
+
+	static boolean isSuspiciousInventoryValueReplacement(long gainedValue, long spentValue, int gainedTypes, int spentTypes)
+	{
+		if (gainedValue <= 0 || spentValue <= 0)
+		{
+			return false;
+		}
+
+		long lowerValue = Math.min(gainedValue, spentValue);
+		long higherValue = Math.max(gainedValue, spentValue);
+		if (lowerValue >= SUSPICIOUS_VALUE_REPLACEMENT_VERY_LARGE_GP)
+		{
+			return true;
+		}
+
+		boolean closeValues = lowerValue * 100L >= higherValue * SUSPICIOUS_VALUE_REPLACEMENT_CLOSE_PERCENT;
+		if (!closeValues)
+		{
+			return false;
+		}
+
+		boolean broadReplacement = lowerValue >= SUSPICIOUS_VALUE_REPLACEMENT_MIN_GP
+			&& gainedTypes >= SUSPICIOUS_VALUE_REPLACEMENT_MIN_TYPES
+			&& spentTypes >= SUSPICIOUS_VALUE_REPLACEMENT_MIN_TYPES;
+		return broadReplacement;
+	}
+
+	private static int countPositiveItemTypes(Map<Integer, Long> quantities)
+	{
+		int count = 0;
+		for (long quantity : quantities.values())
+		{
+			if (quantity > 0)
+			{
+				count++;
+			}
+		}
+
+		return count;
 	}
 
 	private static void subtractQuantity(Map<Integer, Long> quantities, int itemId, long quantity)
@@ -1242,7 +1655,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private long getItemValue(int itemId, long quantity)
 	{
-		int canonicalItemId = ItemVariationMapping.map(itemManager.canonicalize(itemId));
+		int canonicalItemId = itemManager.canonicalize(itemId);
 		if (canonicalItemId == ItemID.COINS_995)
 		{
 			return quantity;
@@ -1253,8 +1666,39 @@ public class SkillingToolkitPlugin extends Plugin
 			return quantity * 1000L;
 		}
 
-		int price = getConfiguredItemPrice(canonicalItemId);
+		int price = getExactItemPrice(canonicalItemId);
+		if (price <= 0)
+		{
+			int variationItemId = ItemVariationMapping.map(canonicalItemId);
+			if (variationItemId != canonicalItemId)
+			{
+				price = getExactItemPrice(variationItemId);
+			}
+		}
 		return price > 0 ? (long) price * quantity : 0L;
+	}
+
+	private int getExactItemPrice(int itemId)
+	{
+		return getConfiguredItemPrice(itemManager.canonicalize(itemId));
+	}
+
+	private String getItemName(int itemId)
+	{
+		try
+		{
+			return itemManager.getItemComposition(itemManager.canonicalize(itemId)).getName();
+		}
+		catch (RuntimeException ignored)
+		{
+			return "";
+		}
+	}
+
+	String getStatsItemName(int itemId)
+	{
+		String name = getItemName(itemId);
+		return name == null || name.isBlank() ? "Item " + itemId : name;
 	}
 
 	private int getConfiguredItemPrice(int itemId)
@@ -1264,7 +1708,7 @@ public class SkillingToolkitPlugin extends Plugin
 			return itemManager.getItemPrice(itemId);
 		}
 
-		return itemManager.getItemPriceWithSource(itemId, false);
+		return itemManager.getItemPriceWithSource(itemId, true);
 	}
 
 	private long getItemCostValue(int itemId, long quantity)
@@ -1350,23 +1794,36 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 	}
 
-	private boolean isBirdHouseItem(int itemId)
+	private static int getBirdHouseLogId(int itemId)
 	{
 		switch (itemId)
 		{
 			case ItemID.BIRD_HOUSE:
+				return ItemID.LOGS;
 			case ItemID.OAK_BIRD_HOUSE:
+				return ItemID.OAK_LOGS;
 			case ItemID.WILLOW_BIRD_HOUSE:
+				return ItemID.WILLOW_LOGS;
 			case ItemID.TEAK_BIRD_HOUSE:
+				return ItemID.TEAK_LOGS;
 			case ItemID.MAPLE_BIRD_HOUSE:
+				return ItemID.MAPLE_LOGS;
 			case ItemID.MAHOGANY_BIRD_HOUSE:
+				return ItemID.MAHOGANY_LOGS;
 			case ItemID.YEW_BIRD_HOUSE:
+				return ItemID.YEW_LOGS;
 			case ItemID.MAGIC_BIRD_HOUSE:
+				return ItemID.MAGIC_LOGS;
 			case ItemID.REDWOOD_BIRD_HOUSE:
-				return true;
+				return ItemID.REDWOOD_LOGS;
 			default:
-				return false;
+				return -1;
 		}
+	}
+
+	private static boolean isBirdHouseItem(int itemId)
+	{
+		return getBirdHouseLogId(itemId) != -1;
 	}
 
 	private String buildInventoryTooltip(long inventoryValue)
@@ -1424,6 +1881,10 @@ public class SkillingToolkitPlugin extends Plugin
 		activeSkillingSkill = skill;
 		lastSkillingXpTick = tickCount;
 		addXpStats(skill, gainedXp);
+		if (skill == Skill.HUNTER && hasRecentBirdhouseXpInteraction())
+		{
+			addBirdhouseXpStats(gainedXp);
+		}
 		commitPendingInventoryValueChanges();
 		if (isForeverTrackerMode())
 		{
@@ -1510,6 +1971,13 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private String getSavedStatsValue(SkillingToolkitStatsPeriod period)
 	{
+		String key = getSavedStatsKey(period);
+		String savedValue = configManager.getConfiguration(SkillingToolkitConfig.GROUP, key);
+		if (savedValue != null)
+		{
+			return savedValue;
+		}
+
 		switch (period)
 		{
 			case DAY:
@@ -1523,6 +1991,24 @@ public class SkillingToolkitPlugin extends Plugin
 			case ALL_TIME:
 			default:
 				return config.savedStatsAllTime();
+		}
+	}
+
+	private String getSavedStatsKey(SkillingToolkitStatsPeriod period)
+	{
+		switch (period)
+		{
+			case DAY:
+				return SAVED_STATS_DAY_KEY;
+			case WEEK:
+				return SAVED_STATS_WEEK_KEY;
+			case MONTH:
+				return SAVED_STATS_MONTH_KEY;
+			case YEAR:
+				return SAVED_STATS_YEAR_KEY;
+			case ALL_TIME:
+			default:
+				return SAVED_STATS_ALL_TIME_KEY;
 		}
 	}
 
@@ -1566,30 +2052,45 @@ public class SkillingToolkitPlugin extends Plugin
 		refreshToolkitPanel();
 	}
 
+	private void addBirdhouseLootStats(long nests, long nestValue, boolean countRun)
+	{
+		for (SkillingToolkitStatsPeriod period : SkillingToolkitStatsPeriod.values())
+		{
+			getStats(period).addBirdhouseLoot(nests, nestValue, countRun);
+			persistStatsValue(period);
+		}
+		refreshToolkitPanel();
+	}
+
+	private void addBirdhouseXpStats(long xp)
+	{
+		for (SkillingToolkitStatsPeriod period : SkillingToolkitStatsPeriod.values())
+		{
+			getStats(period).addBirdhouseXp(xp);
+			persistStatsValue(period);
+		}
+		refreshToolkitPanel();
+	}
+
+	private void addFarmingActivityStats(
+		FarmingActivityType type,
+		long seedsUsed,
+		long seedCost,
+		long harvested,
+		long harvestValue,
+		boolean countRun)
+	{
+		for (SkillingToolkitStatsPeriod period : SkillingToolkitStatsPeriod.values())
+		{
+			getStats(period).addFarmingActivity(type, seedsUsed, seedCost, harvested, harvestValue, countRun);
+			persistStatsValue(period);
+		}
+		refreshToolkitPanel();
+	}
+
 	private void persistStatsValue(SkillingToolkitStatsPeriod period)
 	{
-		String key;
-		switch (period)
-		{
-			case DAY:
-				key = SAVED_STATS_DAY_KEY;
-				break;
-			case WEEK:
-				key = SAVED_STATS_WEEK_KEY;
-				break;
-			case MONTH:
-				key = SAVED_STATS_MONTH_KEY;
-				break;
-			case YEAR:
-				key = SAVED_STATS_YEAR_KEY;
-				break;
-			case ALL_TIME:
-			default:
-				key = SAVED_STATS_ALL_TIME_KEY;
-				break;
-		}
-
-		configManager.setConfiguration(SkillingToolkitConfig.GROUP, key, getStats(period).serialize());
+		configManager.setConfiguration(SkillingToolkitConfig.GROUP, getSavedStatsKey(period), getStats(period).serialize());
 	}
 
 	private void syncAllTimeStatsWithTrackerValues()
@@ -1668,14 +2169,14 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 	}
 
-	private void queueOrCommitInventoryValueChange(long gainedValue, long spentValue)
+	private void queueOrCommitInventoryValueChange(long gainedValue, long spentValue, boolean forceCommit)
 	{
 		if (gainedValue <= 0 && spentValue <= 0)
 		{
 			return;
 		}
 
-		if (isWithinActiveSkillingInventoryWindow())
+		if (forceCommit || isWithinActiveSkillingInventoryWindow())
 		{
 			commitInventoryValueChange(gainedValue, spentValue);
 			return;
@@ -1977,6 +2478,16 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 	}
 
+	boolean isHerbSackViewerQuickEnabled()
+	{
+		return config.showHerbSackViewer();
+	}
+
+	void setHerbSackViewerQuickEnabled(boolean enabled)
+	{
+		setConfigBoolean("showHerbSackViewer", enabled);
+	}
+
 	boolean isClockQuickEnabled()
 	{
 		return config.tradeButtonClock();
@@ -2015,6 +2526,28 @@ public class SkillingToolkitPlugin extends Plugin
 		resetActionsTracker();
 		updateChatTabTrackersLater();
 		refreshToolkitPanel();
+	}
+
+	void resetGpStatsPeriodQuick(SkillingToolkitStatsPeriod period)
+	{
+		if (period == null)
+		{
+			return;
+		}
+
+		getStats(period).resetGp();
+		persistStatsValue(period);
+		refreshToolkitPanel();
+	}
+
+	HerbSackContents getHerbSackContents()
+	{
+		return herbSackContents;
+	}
+
+	long getItemValueForDisplay(int itemId, long quantity)
+	{
+		return getItemValue(itemId, quantity);
 	}
 
 	void resetAllMarkersQuick()
@@ -2155,7 +2688,14 @@ public class SkillingToolkitPlugin extends Plugin
 	{
 		if (!isToolkitUiReady())
 		{
-			restoreChatTabTrackerOverrides();
+			if (isOtherToolkitUiOwnerActive())
+			{
+				forgetChatTabOverrideState();
+			}
+			else
+			{
+				restoreChatTabTrackerOverrides();
+			}
 			return;
 		}
 
@@ -2720,6 +3260,16 @@ public class SkillingToolkitPlugin extends Plugin
 		lastTradeClockText = "";
 	}
 
+	private void forgetChatTabOverrideState()
+	{
+		chatTabOriginalTexts.clear();
+		chatTabOriginalStyles.clear();
+		activeChatTabTexts.clear();
+		activeChatTabTrackerSlots.clear();
+		activeChatTabOverrides.clear();
+		lastTradeClockText = "";
+	}
+
 	private boolean isChatTabTrackerConfigKey(String key)
 	{
 		return "xpTracker".equals(key)
@@ -2728,11 +3278,104 @@ public class SkillingToolkitPlugin extends Plugin
 			|| "actionsTracker".equals(key);
 	}
 
+	private void recordHerbSackCheck(MenuOptionClicked event)
+	{
+		if (!config.showHerbSackViewer()
+			|| !"check".equals(cleanFarmingText(event.getMenuOption()))
+			|| !isHerbSackItem(event.getItemId()))
+		{
+			return;
+		}
+
+		readingHerbSackContents = true;
+		herbSackCheckTick = tickCount;
+		pendingHerbSackQuantities.clear();
+	}
+
+	private void handleHerbSackChatMessage(ChatMessage event)
+	{
+		if (!readingHerbSackContents || event.getType() != ChatMessageType.GAMEMESSAGE)
+		{
+			return;
+		}
+
+		String message = cleanFarmingText(event.getMessage());
+		if (message.contains("herb sack is empty"))
+		{
+			herbSackContents.clearLoaded();
+			resetPendingHerbSackCheck();
+			return;
+		}
+
+		HerbSackContents.ParsedHerbLine parsedLine = HerbSackContents.parseChatLine(message);
+		if (parsedLine != null)
+		{
+			pendingHerbSackQuantities.put(parsedLine.getHerb(), parsedLine.getQuantity());
+		}
+	}
+
+	private void finishPendingHerbSackCheckIfReady()
+	{
+		if (!readingHerbSackContents)
+		{
+			return;
+		}
+
+		int age = tickCount - herbSackCheckTick;
+		if (!pendingHerbSackQuantities.isEmpty() && age > 0)
+		{
+			herbSackContents.setQuantities(pendingHerbSackQuantities);
+			resetPendingHerbSackCheck();
+			return;
+		}
+
+		if (age > HERB_SACK_CHECK_TIMEOUT_TICKS)
+		{
+			resetPendingHerbSackCheck();
+		}
+	}
+
+	private void resetPendingHerbSackCheck()
+	{
+		readingHerbSackContents = false;
+		herbSackCheckTick = Integer.MIN_VALUE;
+		pendingHerbSackQuantities.clear();
+	}
+
+	static boolean isHerbSackItem(int itemId)
+	{
+		return itemId == ItemID.HERB_SACK
+			|| itemId == ItemID.OPEN_HERB_SACK
+			|| itemId == ItemID.SILKLINED_HERB_SACK
+			|| itemId == ItemID.OPEN_SILKLINED_HERB_SACK;
+	}
+
 	private void ignoreInventoryTrackingBriefly()
 	{
 		inventoryTrackerIgnoreTicks = INVENTORY_TRACKER_IGNORE_TICKS;
 		pendingInventoryValueChanges.clear();
 		pendingHerbCleanings.clear();
+	}
+
+	private boolean shouldIgnoreEquipmentTransferChange()
+	{
+		if (pendingEquipmentTransferTick == Integer.MIN_VALUE)
+		{
+			return false;
+		}
+
+		int age = tickCount - pendingEquipmentTransferTick;
+		pendingEquipmentTransferTick = Integer.MIN_VALUE;
+		return age >= 0 && age <= 2;
+	}
+
+	private static boolean isEquipmentTransferInteraction(MenuOptionClicked event)
+	{
+		String option = cleanFarmingText(event.getMenuOption());
+		return "wear".equals(option)
+			|| "wield".equals(option)
+			|| "equip".equals(option)
+			|| ("remove".equals(option) && event.getWidget() != null);
 	}
 
 	private boolean isStorageOrTradeInteraction(MenuOptionClicked event)
@@ -2827,11 +3470,11 @@ public class SkillingToolkitPlugin extends Plugin
 		WorldPoint paymentPatch = resolveProtectionPatchFromDialogNpc();
 		if (paymentPatch != null)
 		{
-			markProtectedPatch(paymentPatch);
+			markProtectedPatch(paymentPatch, true);
 		}
 		else
 		{
-			markProtectedPatch();
+			markProtectedPatch(true);
 		}
 	}
 
@@ -2898,19 +3541,22 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private WorldPoint resolveProtectionPatchFromDialogNpc()
 	{
-		Widget npcModel = client.getWidget(ComponentID.DIALOG_NPC_HEAD_MODEL);
-		if (!isVisibleWidget(npcModel) || npcModel.getModelType() != 2)
-		{
-			return null;
-		}
-
 		WorldPoint anchor = lastProtectionInteraction;
 		if (anchor == null || tickCount - lastProtectionInteractionTick > PROTECTION_INTERACTION_TICK_WINDOW)
 		{
 			return null;
 		}
 
-		FarmingPatch patch = FarmingPatch.fromFarmer(npcModel.getModelId(), lastProtectionPatchNumber, anchor);
+		Widget npcModel = client.getWidget(ComponentID.DIALOG_NPC_HEAD_MODEL);
+		FarmingPatch patch = null;
+		if (isVisibleWidget(npcModel) && npcModel.getModelType() == 2)
+		{
+			patch = FarmingPatch.fromFarmer(npcModel.getModelId(), lastProtectionPatchNumber, anchor);
+		}
+		if (patch == null)
+		{
+			patch = FarmingPatch.nearestProtectableTo(anchor, PROTECTION_PAYMENT_FALLBACK_DISTANCE);
+		}
 		return patch == null ? null : patch.getTile();
 	}
 
@@ -2990,6 +3636,141 @@ public class SkillingToolkitPlugin extends Plugin
 		{
 			clearBirdhouseSeeded(point);
 		}
+	}
+
+	private void recordBirdhouseLootStats(Map<Integer, Long> gainedQuantities, Map<Integer, Long> spentQuantities)
+	{
+		if (gainedQuantities.isEmpty()
+			|| !hasRecentBirdhouseInteraction()
+			|| hasBirdNestItem(spentQuantities))
+		{
+			return;
+		}
+
+		long nests = 0L;
+		long nestValue = 0L;
+		for (Map.Entry<Integer, Long> entry : gainedQuantities.entrySet())
+		{
+			if (!isBirdNestItem(entry.getKey()))
+			{
+				continue;
+			}
+
+			long quantity = Math.max(0L, entry.getValue());
+			nests += quantity;
+			nestValue += getItemProfitValue(entry.getKey(), quantity);
+		}
+
+		if (nests <= 0)
+		{
+			return;
+		}
+
+		long nowMillis = System.currentTimeMillis();
+		boolean countRun = lastBirdhouseStatsRunAtMillis <= 0L
+			|| nowMillis - lastBirdhouseStatsRunAtMillis > BIRDHOUSE_STATS_RUN_GROUP_MILLIS;
+		lastBirdhouseStatsRunAtMillis = nowMillis;
+		addBirdhouseLootStats(nests, nestValue, countRun);
+	}
+
+	private void recordFarmingActivityStats(Map<Integer, Long> gainedQuantities, Map<Integer, Long> spentQuantities)
+	{
+		boolean withinFarmingStatsWindow = isWithinFarmingStatsWindow();
+		if (!withinFarmingStatsWindow)
+		{
+			return;
+		}
+
+		Map<Integer, Long> seedQuantities = hasRecentBirdhouseInteraction() ? Collections.emptyMap() : spentQuantities;
+		recordFarmingActivityStats(FarmingActivityType.HERBS, seedQuantities, gainedQuantities, HERB_SEED_ITEMS, HERB_HARVEST_ITEMS);
+		recordFarmingActivityStats(FarmingActivityType.ALLOTMENTS, seedQuantities, gainedQuantities, ALLOTMENT_SEED_ITEMS, ALLOTMENT_HARVEST_ITEMS);
+		recordFarmingActivityStats(FarmingActivityType.HOPS, seedQuantities, gainedQuantities, HOPS_SEED_ITEMS, HOPS_HARVEST_ITEMS);
+	}
+
+	private boolean isWithinFarmingStatsWindow()
+	{
+		return hasRecentFarmingStatsInteraction()
+			|| (activeSkillingSkill == Skill.FARMING && tickCount - lastSkillingXpTick <= ACTIVE_SKILL_INVENTORY_TICKS);
+	}
+
+	private boolean hasRecentFarmingStatsInteraction()
+	{
+		return lastPatchInteraction != null
+			&& tickCount - lastPatchInteractionTick <= FARMING_STATS_INTERACTION_TICK_WINDOW;
+	}
+
+	private void recordFarmingActivityStats(
+		FarmingActivityType type,
+		Map<Integer, Long> spentQuantities,
+		Map<Integer, Long> gainedQuantities,
+		Set<Integer> seedItems,
+		Set<Integer> harvestItems)
+	{
+		long seedsUsed = sumQuantities(spentQuantities, seedItems);
+		long seedCost = sumItemValues(spentQuantities, seedItems, false);
+		long harvested = sumQuantities(gainedQuantities, harvestItems);
+		long harvestValue = sumItemValues(gainedQuantities, harvestItems, true);
+		if (seedsUsed <= 0 && harvested <= 0)
+		{
+			return;
+		}
+
+		addFarmingActivityStats(type, seedsUsed, seedCost, harvested, harvestValue, shouldCountFarmingRun(type));
+	}
+
+	private boolean shouldCountFarmingRun(FarmingActivityType type)
+	{
+		long nowMillis = System.currentTimeMillis();
+		long lastRunAtMillis = lastFarmingStatsRunAtMillis.getOrDefault(type, 0L);
+		lastFarmingStatsRunAtMillis.put(type, nowMillis);
+		return lastRunAtMillis <= 0L || nowMillis - lastRunAtMillis > FARMING_STATS_RUN_GROUP_MILLIS;
+	}
+
+	private long sumQuantities(Map<Integer, Long> quantities, Set<Integer> itemIds)
+	{
+		long total = 0L;
+		for (int itemId : itemIds)
+		{
+			total += quantities.getOrDefault(itemManager.canonicalize(itemId), 0L);
+		}
+		return total;
+	}
+
+	private long sumItemValues(Map<Integer, Long> quantities, Set<Integer> itemIds, boolean profitValue)
+	{
+		long total = 0L;
+		for (int itemId : itemIds)
+		{
+			int canonicalItemId = itemManager.canonicalize(itemId);
+			long quantity = quantities.getOrDefault(canonicalItemId, 0L);
+			if (quantity <= 0)
+			{
+				continue;
+			}
+
+			total += profitValue
+				? getItemProfitValue(canonicalItemId, quantity)
+				: getItemCostValue(canonicalItemId, quantity);
+		}
+		return total;
+	}
+
+	private boolean hasBirdNestItem(Map<Integer, Long> quantities)
+	{
+		for (int itemId : quantities.keySet())
+		{
+			if (isBirdNestItem(itemId))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private boolean isBirdNestItem(int itemId)
+	{
+		return isBirdNestItemName(getItemName(itemId));
 	}
 
 	private void markBirdhouseSeededFromInventoryChange(Map<Integer, Long> spentQuantities)
@@ -3296,6 +4077,12 @@ public class SkillingToolkitPlugin extends Plugin
 			&& tickCount - lastBirdhouseInteractionTick <= BIRDHOUSE_INTERACTION_TICK_WINDOW;
 	}
 
+	private boolean hasRecentBirdhouseXpInteraction()
+	{
+		return lastBirdhouseInteraction != null
+			&& tickCount - lastBirdhouseInteractionTick <= BIRDHOUSE_XP_INTERACTION_TICK_WINDOW;
+	}
+
 	private WorldPoint normalizeToTrackedBirdhousePoint(WorldPoint point)
 	{
 		WorldPoint trackedPoint = findNearestPoint(seededBirdhouses, point, TRACKED_BIRDHOUSE_NORMALIZE_DISTANCE);
@@ -3348,7 +4135,7 @@ public class SkillingToolkitPlugin extends Plugin
 		persistNeedsCompostPatches();
 	}
 
-	private void markProtectedPatch()
+	private void markProtectedPatch(boolean trustedPaymentConfirmation)
 	{
 		WorldPoint patchPoint = resolveProtectionPatchPoint();
 		if (patchPoint == null)
@@ -3356,10 +4143,10 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
-		markProtectedPatch(patchPoint);
+		markProtectedPatch(patchPoint, trustedPaymentConfirmation);
 	}
 
-	private void markProtectedPatch(WorldPoint patchPoint)
+	private void markProtectedPatch(WorldPoint patchPoint, boolean trustedPaymentConfirmation)
 	{
 		patchPoint = normalizeToProtectablePatchPoint(patchPoint);
 		if (patchPoint == null)
@@ -3367,7 +4154,9 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
-		if (visibleFarmingPatches.contains(patchPoint) && !activeProtectableFarmingPatches.contains(patchPoint))
+		if (!trustedPaymentConfirmation
+			&& visibleFarmingPatches.contains(patchPoint)
+			&& !activeProtectableFarmingPatches.contains(patchPoint))
 		{
 			return;
 		}
@@ -4244,7 +5033,12 @@ public class SkillingToolkitPlugin extends Plugin
 	private static boolean isCropProtectionMessage(String message)
 	{
 		boolean paymentConfirmation = message.contains("leave it with me")
-			&& (message.contains("patch grows") || message.contains("patch grow") || message.contains("nursery"));
+			&& (message.contains("grow")
+				|| message.contains("safe")
+				|| message.contains("protect")
+				|| message.contains("look after")
+				|| message.contains("take care")
+				|| message.contains("nursery"));
 		boolean alreadyProtected = message.contains("already looking after")
 			|| message.contains("already looked after")
 			|| message.contains("already taking care of")
@@ -4310,6 +5104,30 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 
 		return false;
+	}
+
+	private static boolean isFarmingWorldInteraction(MenuAction action)
+	{
+		switch (action)
+		{
+			case ITEM_USE_ON_GAME_OBJECT:
+			case WIDGET_TARGET_ON_GAME_OBJECT:
+			case GAME_OBJECT_FIRST_OPTION:
+			case GAME_OBJECT_SECOND_OPTION:
+			case GAME_OBJECT_THIRD_OPTION:
+			case GAME_OBJECT_FOURTH_OPTION:
+			case GAME_OBJECT_FIFTH_OPTION:
+			case EXAMINE_OBJECT:
+			case WORLD_ENTITY_FIRST_OPTION:
+			case WORLD_ENTITY_SECOND_OPTION:
+			case WORLD_ENTITY_THIRD_OPTION:
+			case WORLD_ENTITY_FOURTH_OPTION:
+			case WORLD_ENTITY_FIFTH_OPTION:
+			case EXAMINE_WORLD_ENTITY:
+				return true;
+			default:
+				return false;
+		}
 	}
 
 	private ObjectComposition getObjectComposition(GameObject object)
@@ -4728,6 +5546,16 @@ public class SkillingToolkitPlugin extends Plugin
 		times.put(cropName, new PatchGrowthInfo(cropName, growthMinutes));
 	}
 
+	private static Set<Integer> immutableItemSet(int... itemIds)
+	{
+		Set<Integer> set = new HashSet<>();
+		for (int itemId : itemIds)
+		{
+			set.add(itemId);
+		}
+		return Collections.unmodifiableSet(set);
+	}
+
 	private boolean isSeedItem(int itemId)
 	{
 		try
@@ -4739,6 +5567,25 @@ public class SkillingToolkitPlugin extends Plugin
 		{
 			return false;
 		}
+	}
+
+	private static boolean isBirdNestItemName(String itemName)
+	{
+		String name = cleanFarmingText(itemName);
+		return name.contains("nest") && !name.contains("nest box");
+	}
+
+	private static boolean isBirdNestOpeningOutputName(String itemName)
+	{
+		String name = cleanFarmingText(itemName);
+		return isBirdNestItemName(name)
+			|| name.contains("seed")
+			|| name.contains("clue scroll")
+			|| name.endsWith(" egg")
+			|| name.contains(" egg ")
+			|| name.startsWith("ring of")
+			|| name.endsWith(" ring")
+			|| name.contains(" ring ");
 	}
 
 	private static boolean isBirdhouseText(String text)
@@ -4781,7 +5628,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void markSkillingActivity()
 	{
-		if (!ownsToolkitUi())
+		if (!ownsToolkitUi() && !isRecentToolkitOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_OWNER_GRACE_TICKS))
 		{
 			setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING);
 		}
@@ -4875,6 +5722,24 @@ public class SkillingToolkitPlugin extends Plugin
 		return TOOLKIT_UI_OWNER_SKILLING.equals(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY));
 	}
 
+	private boolean isOtherToolkitUiOwnerActive()
+	{
+		return TOOLKIT_UI_OWNER_PVM.equals(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY))
+			&& isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME);
+	}
+
+	private boolean isRecentToolkitOwner(String owner, int graceTicks)
+	{
+		if (!owner.equals(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY)))
+		{
+			return false;
+		}
+
+		long ownerTick = parseLongConfig(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY));
+		int currentTick = client.getTickCount();
+		return ownerTick <= currentTick && currentTick - ownerTick <= graceTicks;
+	}
+
 	private boolean isToolkitUiReady()
 	{
 		if (!ownsToolkitUi())
@@ -4955,6 +5820,30 @@ public class SkillingToolkitPlugin extends Plugin
 			this.gainedValue = gainedValue;
 			this.spentValue = spentValue;
 			this.tick = tick;
+		}
+	}
+
+	static final class InventoryValueAdjustment
+	{
+		final long gainedValue;
+		final long spentValue;
+
+		private InventoryValueAdjustment(long gainedValue, long spentValue)
+		{
+			this.gainedValue = gainedValue;
+			this.spentValue = spentValue;
+		}
+	}
+
+	private static final class ChargedItemVariant
+	{
+		private final String baseName;
+		private final int charges;
+
+		private ChargedItemVariant(String baseName, int charges)
+		{
+			this.baseName = baseName;
+			this.charges = charges;
 		}
 	}
 
