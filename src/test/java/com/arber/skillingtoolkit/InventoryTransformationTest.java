@@ -147,6 +147,28 @@ public class InventoryTransformationTest
 		assertFalse(SkillingToolkitPlugin.isSuspiciousInventoryValueReplacement(1_100_000L, 120_000L, 2, 2));
 	}
 
+	@Test
+	public void inventoryValueChangesNeedSkillingContext()
+	{
+		assertFalse(SkillingToolkitPlugin.shouldAcceptInventoryValueChange(false, false, false, false));
+		assertTrue(SkillingToolkitPlugin.shouldAcceptInventoryValueChange(false, true, false, false));
+		assertTrue(SkillingToolkitPlugin.shouldAcceptInventoryValueChange(false, false, true, false));
+		assertTrue(SkillingToolkitPlugin.shouldAcceptInventoryValueChange(true, false, false, false));
+		assertFalse(SkillingToolkitPlugin.shouldAcceptInventoryValueChange(false, false, true, true));
+		assertTrue(SkillingToolkitPlugin.shouldAcceptInventoryValueChange(false, true, false, true));
+	}
+
+	@Test
+	public void herbSackTransfersAreIgnoredForInventoryValueTracking()
+	{
+		assertTrue(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.HERB_SACK, "Empty"));
+		assertTrue(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.OPEN_HERB_SACK, "Fill"));
+		assertTrue(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.SILKLINED_HERB_SACK, "Open"));
+		assertTrue(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.OPEN_SILKLINED_HERB_SACK, "Close"));
+		assertFalse(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.OPEN_HERB_SACK, "Check"));
+		assertFalse(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.RANARR_WEED, "Empty"));
+	}
+
 	private static Map<Integer, Long> quantities(int itemId, long quantity, Object... additional)
 	{
 		Map<Integer, Long> quantities = new HashMap<>();

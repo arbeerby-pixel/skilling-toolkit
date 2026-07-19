@@ -84,6 +84,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final int HARVEST_SCENE_SCAN_INTERVAL = 5;
 	private static final int INVENTORY_SIZE = 28;
 	private static final int INVENTORY_TRACKER_IGNORE_TICKS = 10;
+	private static final int STORAGE_INVENTORY_TRACKER_IGNORE_TICKS = 35;
 	private static final int IGNORED_INVENTORY_RETURN_TICKS = 12;
 	private static final int PENDING_INVENTORY_VALUE_TICKS = 8;
 	private static final int PENDING_HERB_CLEANING_TICKS = 4;
@@ -745,7 +746,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 		if (isInventoryTransferInterfaceOpen())
 		{
-			ignoreInventoryTrackingBriefly();
+			ignoreInventoryTrackingForStorage();
 		}
 
 		cleanupPendingInventoryValueChanges();
@@ -830,6 +831,10 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 
 		if (isStorageOrTradeInteraction(event))
+		{
+			ignoreInventoryTrackingForStorage();
+		}
+		else if (isHerbSackInventoryTransferInteraction(event))
 		{
 			ignoreInventoryTrackingBriefly();
 		}
@@ -2176,7 +2181,18 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
-		if (forceCommit || isWithinActiveSkillingInventoryWindow())
+		boolean activeSkillingInventoryWindow = isWithinActiveSkillingInventoryWindow();
+		boolean recentDirectSkillingInteraction = hasRecentDirectSkillingInventoryInteraction();
+		if (!shouldAcceptInventoryValueChange(
+			forceCommit,
+			activeSkillingInventoryWindow,
+			recentDirectSkillingInteraction,
+			isOtherToolkitUiOwnerActive()))
+		{
+			return;
+		}
+
+		if (forceCommit || activeSkillingInventoryWindow)
 		{
 			commitInventoryValueChange(gainedValue, spentValue);
 			return;
@@ -2213,6 +2229,30 @@ public class SkillingToolkitPlugin extends Plugin
 	private boolean isWithinActiveSkillingInventoryWindow()
 	{
 		return activeSkillingSkill != null && tickCount - lastSkillingXpTick <= ACTIVE_SKILL_INVENTORY_TICKS;
+	}
+
+	private boolean hasRecentDirectSkillingInventoryInteraction()
+	{
+		return hasRecentFarmingStatsInteraction() || hasRecentBirdhouseInteraction();
+	}
+
+	static boolean shouldAcceptInventoryValueChange(
+		boolean forceCommit,
+		boolean activeSkillingInventoryWindow,
+		boolean recentDirectSkillingInteraction,
+		boolean otherToolkitOwnerActive)
+	{
+		if (forceCommit)
+		{
+			return true;
+		}
+
+		if (otherToolkitOwnerActive && !activeSkillingInventoryWindow)
+		{
+			return false;
+		}
+
+		return activeSkillingInventoryWindow || recentDirectSkillingInteraction;
 	}
 
 	private void commitInventoryValueChange(long gainedValue, long spentValue)
@@ -3355,6 +3395,28 @@ public class SkillingToolkitPlugin extends Plugin
 		inventoryTrackerIgnoreTicks = INVENTORY_TRACKER_IGNORE_TICKS;
 		pendingInventoryValueChanges.clear();
 		pendingHerbCleanings.clear();
+	}
+
+	private void ignoreInventoryTrackingForStorage()
+	{
+		inventoryTrackerIgnoreTicks = Math.max(inventoryTrackerIgnoreTicks, STORAGE_INVENTORY_TRACKER_IGNORE_TICKS);
+		pendingInventoryValueChanges.clear();
+		pendingHerbCleanings.clear();
+	}
+
+	private boolean isHerbSackInventoryTransferInteraction(MenuOptionClicked event)
+	{
+		return isHerbSackInventoryTransferOption(event.getItemId(), event.getMenuOption());
+	}
+
+	static boolean isHerbSackInventoryTransferOption(int itemId, String menuOption)
+	{
+		String option = cleanFarmingText(menuOption);
+		return isHerbSackItem(itemId)
+			&& (option.equals("empty")
+			|| option.equals("fill")
+			|| option.equals("open")
+			|| option.equals("close"));
 	}
 
 	private boolean shouldIgnoreEquipmentTransferChange()
