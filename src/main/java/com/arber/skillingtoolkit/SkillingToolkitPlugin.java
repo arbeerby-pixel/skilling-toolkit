@@ -125,11 +125,18 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final String TOOLKIT_UI_OWNER_KEY = "activeOwner";
 	private static final String TOOLKIT_UI_OWNER_TICK_KEY = "activeOwnerTick";
 	private static final String TOOLKIT_UI_LAST_TOGGLE_TICK_KEY = "lastToggleTick";
+	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
+	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
+	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
+	private static final String TOOLKIT_UI_SOURCE_ACTIVITY = "ACTIVITY";
+	private static final String TOOLKIT_UI_SOURCE_MANUAL = "MANUAL";
 	private static final String SKILLING_PLUGIN_CLASS_NAME = "com.arber.skillingtoolkit.SkillingToolkitPlugin";
-	private static final String PVM_PLUGIN_CLASS_NAME = "com.arber.prayerpottimer.CombatPotionTimersPlugin";
-	private static final int TOOLKIT_UI_OWNER_GRACE_TICKS = 2;
+	private static final String[] PVM_PLUGIN_CLASS_NAMES = {
+		"com.arber.pvmtools.PvmToolsPlugin",
+		"com.arber.prayerpottimer.CombatPotionTimersPlugin"
+	};
 	private static final String DID_I_COMPOST_PLUGIN_CLASS_NAME = "com.compost.DidICompostPlugin";
 	private static final DateTimeFormatter TRADE_CLOCK_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 	private static final int PATCH_TIMER_INTERACTION_TICK_WINDOW = 12;
@@ -494,6 +501,8 @@ public class SkillingToolkitPlugin extends Plugin
 	private InventorySpacesInfoBox inventorySpacesInfoBox;
 	private SkillingToolkitPanel toolkitPanel;
 	private NavigationButton toolkitNavigationButton;
+	private volatile boolean started;
+	private int toolkitUiGeneration;
 	private FarmingPatch currentFarmingPatch;
 	private FarmingPatch currentCompostPatch;
 	private WorldPoint lastPatchInteraction;
@@ -590,13 +599,10 @@ public class SkillingToolkitPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
+		started = true;
+		toolkitUiGeneration++;
 		overlayManager.add(overlay);
 		overlayManager.add(herbSackOverlay);
-		if (isLoggedIn())
-		{
-			ignoreInventoryTrackingBriefly();
-			syncInventoryTrackerBaseline();
-		}
 		loadCompostPatches();
 		loadNeedsCompostPatches();
 		loadProtectedPatches();
@@ -605,16 +611,36 @@ public class SkillingToolkitPlugin extends Plugin
 		loadTrackerValues();
 		loadStatsValues();
 		addToolkitNavigation();
+		initializeClientStateLater();
+	}
+
+	private void initializeClientStateLater()
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!started || !isLoggedIn())
+			{
+				return;
+			}
+
+			ignoreInventoryTrackingBriefly();
+			syncInventoryTrackerBaseline();
+			syncTrackerSkillBaselines();
+			ensureToolkitOwnerAvailable();
+			syncInventoryInfoBox();
+			updateChatTabTrackers();
+		});
 	}
 
 	@Override
 	protected void shutDown()
 	{
+		started = false;
 		overlayManager.remove(overlay);
 		overlayManager.remove(herbSackOverlay);
 		removeToolkitNavigation();
 		removeInventoryInfoBox();
-		restoreChatTabOverridesLater();
+		releaseToolkitUiOwnershipLater();
 		persistCompostPatches();
 		persistNeedsCompostPatches();
 		persistProtectedPatches();
@@ -649,6 +675,13 @@ public class SkillingToolkitPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
+			&& TOOLKIT_UI_OWNER_KEY.equals(event.getKey()))
+		{
+			refreshToolkitUiOwnershipLater();
+			return;
+		}
+
 		if (!SkillingToolkitConfig.GROUP.equals(event.getGroup()))
 		{
 			return;
@@ -1936,7 +1969,6 @@ public class SkillingToolkitPlugin extends Plugin
 		costValue = isForeverTrackerMode() ? parseLongConfig(config.savedCostTrackerValue()) : 0L;
 		actionsValue = isForeverTrackerMode() ? parseLongConfig(config.savedActionsTrackerValue()) : 0L;
 		loadChatTabTrackerOrder();
-		syncTrackerSkillBaselines();
 		trackerValuesLoaded = true;
 	}
 
@@ -2713,7 +2745,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void updateTradeButtonClock()
 	{
-		if (!config.tradeButtonClock())
+		if (!isToolkitUiReady() || !config.tradeButtonClock())
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
 			return;
@@ -2728,14 +2760,7 @@ public class SkillingToolkitPlugin extends Plugin
 	{
 		if (!isToolkitUiReady())
 		{
-			if (isOtherToolkitUiOwnerActive())
-			{
-				forgetChatTabOverrideState();
-			}
-			else
-			{
-				restoreChatTabTrackerOverrides();
-			}
+			restoreChatTabTrackerOverrides();
 			return;
 		}
 
@@ -3227,9 +3252,53 @@ public class SkillingToolkitPlugin extends Plugin
 		clientThread.invokeLater(this::updateChatTabTrackers);
 	}
 
-	private void restoreChatTabOverridesLater()
+	private void refreshToolkitUiOwnershipLater()
 	{
-		clientThread.invokeLater(this::restoreChatTabOverrides);
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				return;
+			}
+
+			syncInventoryInfoBox();
+			updateChatTabTrackers();
+		});
+	}
+
+	private void releaseToolkitUiOwnershipLater()
+	{
+		int generation = toolkitUiGeneration;
+		clientThread.invokeLater(() ->
+		{
+			if (started || generation != toolkitUiGeneration)
+			{
+				return;
+			}
+
+			restoreChatTabOverrides();
+			removeInventoryInfoBox();
+			if (!ownsToolkitUi())
+			{
+				return;
+			}
+
+			if (isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
+			{
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, TOOLKIT_UI_SOURCE_ACTIVITY);
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, TOOLKIT_UI_OWNER_PVM);
+			}
+			else
+			{
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
+			}
+		});
 	}
 
 	private void restoreChatTabOverride(int componentId)
@@ -5690,9 +5759,9 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void markSkillingActivity()
 	{
-		if (!ownsToolkitUi() && !isRecentToolkitOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_OWNER_GRACE_TICKS))
+		if (!ownsToolkitUi() && !isToolkitUiManuallySelected())
 		{
-			setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING);
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING, TOOLKIT_UI_SOURCE_ACTIVITY);
 		}
 	}
 
@@ -5714,7 +5783,7 @@ public class SkillingToolkitPlugin extends Plugin
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY, Integer.toString(currentTick));
 		boolean skillingEnabled = isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME);
-		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME);
+		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES);
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
 		String nextOwner;
 		if (skillingEnabled && pvmEnabled)
@@ -5726,7 +5795,7 @@ public class SkillingToolkitPlugin extends Plugin
 			nextOwner = pvmEnabled ? TOOLKIT_UI_OWNER_PVM : TOOLKIT_UI_OWNER_SKILLING;
 		}
 
-		setToolkitUiOwner(nextOwner);
+		setToolkitUiOwner(nextOwner, TOOLKIT_UI_SOURCE_MANUAL);
 		return true;
 	}
 
@@ -5740,8 +5809,20 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void ensureToolkitOwnerAvailable()
 	{
+		String sessionId = getToolkitUiSessionId();
+		String savedSessionId = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY);
+		if (!sessionId.equals(savedSessionId))
+		{
+			configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY);
+			String initialOwner = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES)
+				? TOOLKIT_UI_OWNER_PVM
+				: TOOLKIT_UI_OWNER_SKILLING;
+			setToolkitUiOwner(initialOwner, TOOLKIT_UI_SOURCE_ACTIVITY);
+			return;
+		}
+
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
-		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME))
+		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
 		{
 			return;
 		}
@@ -5751,32 +5832,63 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
-		setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING);
+		setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING, TOOLKIT_UI_SOURCE_ACTIVITY);
 	}
 
-	private boolean isToolkitPluginEnabled(String className)
+	private boolean isToolkitPluginEnabled(String... classNames)
 	{
 		for (Plugin plugin : pluginManager.getPlugins())
 		{
-			if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginEnabled(plugin))
+			for (String className : classNames)
 			{
-				return true;
+				if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginActive(plugin))
+				{
+					return true;
+				}
 			}
 		}
 
 		return false;
 	}
 
-	private void setToolkitUiOwner(String owner)
+	private void setToolkitUiOwner(String owner, String source)
 	{
-		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY, getToolkitUiSessionId());
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, source);
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
 		clientThread.invokeLater(() ->
 		{
+			if (!started)
+			{
+				return;
+			}
+
 			syncInventoryInfoBox();
 			updateChatTabTrackers();
 		});
+	}
+
+	private boolean isToolkitUiManuallySelected()
+	{
+		return TOOLKIT_UI_SOURCE_MANUAL.equals(configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY));
+	}
+
+	private static String getToolkitUiSessionId()
+	{
+		synchronized (System.getProperties())
+		{
+			String sessionId = System.getProperty(TOOLKIT_UI_SESSION_PROPERTY);
+			if (sessionId == null || sessionId.isBlank())
+			{
+				sessionId = java.util.UUID.randomUUID().toString();
+				System.setProperty(TOOLKIT_UI_SESSION_PROPERTY, sessionId);
+			}
+
+			return sessionId;
+		}
 	}
 
 	private boolean ownsToolkitUi()
@@ -5787,19 +5899,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private boolean isOtherToolkitUiOwnerActive()
 	{
 		return TOOLKIT_UI_OWNER_PVM.equals(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY))
-			&& isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME);
-	}
-
-	private boolean isRecentToolkitOwner(String owner, int graceTicks)
-	{
-		if (!owner.equals(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY)))
-		{
-			return false;
-		}
-
-		long ownerTick = parseLongConfig(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY));
-		int currentTick = client.getTickCount();
-		return ownerTick <= currentTick && currentTick - ownerTick <= graceTicks;
+			&& isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES);
 	}
 
 	private boolean isToolkitUiReady()
