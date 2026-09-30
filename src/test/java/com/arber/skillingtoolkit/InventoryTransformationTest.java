@@ -3,7 +3,7 @@ package com.arber.skillingtoolkit;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.IntFunction;
-import java.util.function.IntUnaryOperator;
+import java.util.function.IntToLongFunction;
 import net.runelite.api.ItemID;
 import org.junit.Test;
 
@@ -68,7 +68,7 @@ public class InventoryTransformationTest
 	{
 		Map<Integer, Long> gained = quantities(2, 1L);
 		Map<Integer, Long> spent = quantities(1, 1L);
-		IntUnaryOperator prices = itemId -> itemId == 1 ? 18_000 : 15_000;
+		IntToLongFunction prices = itemId -> itemId == 1 ? 18_000L : 15_000L;
 		IntFunction<String> names = itemId -> itemId == 1 ? "Digsite pendant(5)" : "Digsite pendant(4)";
 
 		SkillingToolkitPlugin.InventoryValueAdjustment adjustment =
@@ -85,7 +85,7 @@ public class InventoryTransformationTest
 	{
 		Map<Integer, Long> gained = quantities(2, 1L);
 		Map<Integer, Long> spent = quantities(1, 1L);
-		IntUnaryOperator prices = itemId -> itemId == 1 ? 20_000 : 0;
+		IntToLongFunction prices = itemId -> itemId == 1 ? 20_000L : 0L;
 		IntFunction<String> names = itemId -> itemId == 1 ? "Skills necklace(4)" : "Skills necklace(3)";
 
 		SkillingToolkitPlugin.InventoryValueAdjustment adjustment =
@@ -99,7 +99,7 @@ public class InventoryTransformationTest
 	{
 		Map<Integer, Long> gained = quantities(2, 1L);
 		Map<Integer, Long> spent = quantities(1, 1L);
-		IntUnaryOperator prices = itemId -> 10_000;
+		IntToLongFunction prices = itemId -> 10_000L;
 		IntFunction<String> names = itemId -> itemId == 1 ? "Potion(4)" : "Different potion(3)";
 
 		SkillingToolkitPlugin.InventoryValueAdjustment adjustment =
@@ -167,6 +167,14 @@ public class InventoryTransformationTest
 		assertTrue(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.OPEN_SILKLINED_HERB_SACK, "Close"));
 		assertFalse(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.OPEN_HERB_SACK, "Check"));
 		assertFalse(SkillingToolkitPlugin.isHerbSackInventoryTransferOption(ItemID.RANARR_WEED, "Empty"));
+	}
+
+	@Test
+	public void permanentCompostMarkersDisableAutoClear()
+	{
+		assertTrue(SkillingToolkitPlugin.shouldAutoClearCompostMarkers(true, false));
+		assertFalse(SkillingToolkitPlugin.shouldAutoClearCompostMarkers(true, true));
+		assertFalse(SkillingToolkitPlugin.shouldAutoClearCompostMarkers(false, false));
 	}
 
 	private static Map<Integer, Long> quantities(int itemId, long quantity, Object... additional)

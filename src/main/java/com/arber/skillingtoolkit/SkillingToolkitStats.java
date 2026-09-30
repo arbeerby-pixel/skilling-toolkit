@@ -1,6 +1,8 @@
 package com.arber.skillingtoolkit;
 
+import java.util.Collections;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import net.runelite.api.Skill;
 
@@ -15,6 +17,7 @@ class SkillingToolkitStats
 	private long birdhouseNestValue;
 	private long birdhouseXp;
 	private final EnumMap<Skill, Long> xpBySkill = new EnumMap<>(Skill.class);
+	private final EnumMap<Skill, SkillActivityStats> activityStatsBySkill = new EnumMap<>(Skill.class);
 	private final EnumMap<FarmingActivityType, FarmingActivityStats> farmingStatsByType = new EnumMap<>(FarmingActivityType.class);
 
 	SkillingToolkitStats(String periodId)
@@ -23,6 +26,7 @@ class SkillingToolkitStats
 		for (Skill skill : SkillingToolkitPlugin.SKILLING_TRACKER_SKILLS)
 		{
 			xpBySkill.put(skill, 0L);
+			activityStatsBySkill.put(skill, new SkillActivityStats());
 		}
 		for (FarmingActivityType type : FarmingActivityType.values())
 		{
@@ -75,6 +79,9 @@ class SkillingToolkitStats
 				case "xp":
 					stats.parseXp(parts[1]);
 					break;
+				case "activities":
+					stats.parseActivityStats(parts[1]);
+					break;
 				default:
 					stats.parseFarmingStats(parts[0], parts[1]);
 					break;
@@ -105,6 +112,10 @@ class SkillingToolkitStats
 		copy.birdhouseNestValue = birdhouseNestValue;
 		copy.birdhouseXp = birdhouseXp;
 		copy.xpBySkill.putAll(xpBySkill);
+		for (Map.Entry<Skill, SkillActivityStats> entry : activityStatsBySkill.entrySet())
+		{
+			copy.activityStatsBySkill.put(entry.getKey(), entry.getValue().copy());
+		}
 		for (Map.Entry<FarmingActivityType, FarmingActivityStats> entry : farmingStatsByType.entrySet())
 		{
 			copy.farmingStatsByType.put(entry.getKey(), entry.getValue().copy());
@@ -134,7 +145,8 @@ class SkillingToolkitStats
 			+ ";birdhouseNestValue=" + birdhouseNestValue
 			+ ";birdhouseXp=" + birdhouseXp
 			+ serializeFarmingStats()
-			+ ";xp=" + xp;
+			+ ";xp=" + xp
+			+ serializeActivityStats();
 	}
 
 	String getPeriodId()
@@ -231,6 +243,15 @@ class SkillingToolkitStats
 	void addFarmingActivity(FarmingActivityType type, long seedsUsed, long seedCost, long harvested, long harvestValue, boolean countRun)
 	{
 		farmingStatsByType.get(type).add(seedsUsed, seedCost, harvested, harvestValue, countRun);
+	}
+
+	void addActivity(Skill skill, int itemId, long processed, long xp, long inputCost, long outputValue, long nowMillis)
+	{
+		SkillActivityStats stats = activityStatsBySkill.get(skill);
+		if (stats != null)
+		{
+			stats.add(itemId, processed, xp, inputCost, outputValue, nowMillis);
+		}
 	}
 
 	boolean ensureActionsAtLeast(long value)
@@ -341,6 +362,12 @@ class SkillingToolkitStats
 		return farmingStatsByType.get(type).copy();
 	}
 
+	List<ProcessedItemStats> getActivityStats(Skill skill)
+	{
+		SkillActivityStats stats = activityStatsBySkill.get(skill);
+		return stats == null ? Collections.emptyList() : stats.getItemsByRecent();
+	}
+
 	private void parseXp(String value)
 	{
 		if (value == null || value.isBlank())
@@ -382,6 +409,61 @@ class SkillingToolkitStats
 				.append(farmingStatsByType.get(type).serialize());
 		}
 		return serialized.toString();
+	}
+
+	private String serializeActivityStats()
+	{
+		StringBuilder serialized = new StringBuilder();
+		for (Map.Entry<Skill, SkillActivityStats> entry : activityStatsBySkill.entrySet())
+		{
+			String skillStats = entry.getValue().serialize();
+			if (skillStats.isBlank())
+			{
+				continue;
+			}
+
+			if (serialized.length() > 0)
+			{
+				serialized.append('#');
+			}
+
+			serialized.append(entry.getKey().name())
+				.append(':')
+				.append(skillStats);
+		}
+
+		return ";activities=" + serialized;
+	}
+
+	private void parseActivityStats(String value)
+	{
+		if (value == null || value.isBlank())
+		{
+			return;
+		}
+
+		for (String skillValue : value.split("#", -1))
+		{
+			String[] parts = skillValue.split(":", 2);
+			if (parts.length != 2)
+			{
+				continue;
+			}
+
+			try
+			{
+				Skill skill = Skill.valueOf(parts[0]);
+				SkillActivityStats stats = activityStatsBySkill.get(skill);
+				if (stats != null)
+				{
+					stats.deserialize(parts[1]);
+				}
+			}
+			catch (IllegalArgumentException ignored)
+			{
+				// Ignore stale or manually edited values.
+			}
+		}
 	}
 
 	private void parseFarmingStats(String key, String value)

@@ -1,26 +1,37 @@
 package com.arber.skillingtoolkit;
 
 import com.google.inject.Provides;
+import java.awt.Canvas;
 import java.awt.Color;
+import java.awt.Component;
+import java.awt.Container;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.function.IntFunction;
-import java.util.function.IntUnaryOperator;
+import java.util.function.IntToLongFunction;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.inject.Inject;
+import javax.swing.JCheckBox;
+import javax.swing.JLabel;
+import javax.swing.JRootPane;
 import javax.swing.SwingUtilities;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
@@ -32,7 +43,9 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.ItemID;
 import net.runelite.api.MenuAction;
+import net.runelite.api.NPC;
 import net.runelite.api.ObjectComposition;
+import net.runelite.api.Player;
 import net.runelite.api.Scene;
 import net.runelite.api.Skill;
 import net.runelite.api.Tile;
@@ -48,12 +61,15 @@ import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.ComponentID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.externalplugins.ExternalPluginManager;
+import net.runelite.client.externalplugins.PluginHubManifest;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.ItemVariationMapping;
 import net.runelite.client.plugins.Plugin;
@@ -71,7 +87,7 @@ import net.runelite.client.util.Text;
 	name = "Skilling Toolkit",
 	configName = SkillingToolkitConfig.GROUP,
 	description = "Adds Farming and Hunter helpers, skilling trackers, inventory helpers, and a Trade-tab clock.",
-	tags = {"skilling", "farming", "compost", "protection", "birdhouse", "hunter", "herb", "sack", "tracker", "xp", "profit", "cost", "clock", "inventory"}
+	tags = {"skilling", "farming", "compost", "protection", "birdhouse", "hunter", "impling", "herb", "sack", "tracker", "xp", "profit", "cost", "clock", "inventory"}
 )
 public class SkillingToolkitPlugin extends Plugin
 {
@@ -87,8 +103,10 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final int STORAGE_INVENTORY_TRACKER_IGNORE_TICKS = 35;
 	private static final int IGNORED_INVENTORY_RETURN_TICKS = 12;
 	private static final int PENDING_INVENTORY_VALUE_TICKS = 8;
+	private static final int PENDING_PROCESSING_ACTIVITY_TICKS = 4;
 	private static final int PENDING_HERB_CLEANING_TICKS = 4;
 	private static final int ACTIVE_SKILL_INVENTORY_TICKS = 8;
+	private static final int UPDATE_SCROLL_READY_TICKS = 2;
 	private static final int SUSPICIOUS_EMPTY_INVENTORY_ITEM_TYPES = 8;
 	private static final long SUSPICIOUS_VALUE_REPLACEMENT_MIN_GP = 1_000_000L;
 	private static final long SUSPICIOUS_VALUE_REPLACEMENT_VERY_LARGE_GP = 5_000_000L;
@@ -115,21 +133,32 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final String SAVED_PROTECTED_PATCHES_KEY = "savedProtectedPatchesV1";
 	private static final String SAVED_PATCH_TIMERS_KEY = "savedPatchTimersV1";
 	private static final String SAVED_SEEDED_BIRDHOUSES_KEY = "savedSeededBirdhousesV1";
+	private static final String SAVED_BIRDHOUSE_RUN_READY_AT_KEY = "savedBirdhouseRunReadyAtMillisV1";
+	private static final String SAVED_HERB_RUN_READY_AT_KEY = "savedHerbRunReadyAtMillisV1";
 	private static final String SAVED_CHAT_TAB_TRACKER_ORDER_KEY = "savedChatTabTrackerOrderV1";
 	private static final String SAVED_STATS_DAY_KEY = "savedStatsDayV1";
 	private static final String SAVED_STATS_WEEK_KEY = "savedStatsWeekV1";
 	private static final String SAVED_STATS_MONTH_KEY = "savedStatsMonthV1";
 	private static final String SAVED_STATS_YEAR_KEY = "savedStatsYearV1";
 	private static final String SAVED_STATS_ALL_TIME_KEY = "savedStatsAllTimeV1";
+	private static final String SEEN_UPDATE_SCROLL_VERSION_KEY = "seenUpdateScrollVersionV2";
 	private static final String TOOLKIT_UI_COORDINATION_GROUP = "arberToolkitUi";
 	private static final String TOOLKIT_UI_OWNER_KEY = "activeOwner";
 	private static final String TOOLKIT_UI_OWNER_TICK_KEY = "activeOwnerTick";
 	private static final String TOOLKIT_UI_LAST_TOGGLE_TICK_KEY = "lastToggleTick";
+	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
+	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
+	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
+	private static final String TOOLKIT_UI_SOURCE_ACTIVITY = "ACTIVITY";
+	private static final String TOOLKIT_UI_SOURCE_MANUAL = "MANUAL";
 	private static final String SKILLING_PLUGIN_CLASS_NAME = "com.arber.skillingtoolkit.SkillingToolkitPlugin";
-	private static final String PVM_PLUGIN_CLASS_NAME = "com.arber.prayerpottimer.CombatPotionTimersPlugin";
-	private static final int TOOLKIT_UI_OWNER_GRACE_TICKS = 2;
+	private static final String[] PVM_PLUGIN_CLASS_NAMES = {
+		"com.arber.pvmtools.PvmToolsPlugin",
+		"com.arber.prayerpottimer.CombatPotionTimersPlugin"
+	};
+	private static final long IMPLING_MEMORY_MILLIS = 60_000L;
 	private static final String DID_I_COMPOST_PLUGIN_CLASS_NAME = "com.compost.DidICompostPlugin";
 	private static final DateTimeFormatter TRADE_CLOCK_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 	private static final int PATCH_TIMER_INTERACTION_TICK_WINDOW = 12;
@@ -161,9 +190,22 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final int BIRDHOUSE_XP_INTERACTION_TICK_WINDOW = 12;
 	private static final int TRACKED_BIRDHOUSE_NORMALIZE_DISTANCE = 4;
 	private static final long BIRDHOUSE_DURATION_MILLIS = 50L * 60_000L;
+	private static final long HERB_RUN_DURATION_MILLIS = 80L * 60_000L;
 	private static final long BIRDHOUSE_STATS_RUN_GROUP_MILLIS = 10L * 60_000L;
 	private static final long FARMING_STATS_RUN_GROUP_MILLIS = 15L * 60_000L;
+	private static final int TEARS_OF_GUTHIX_MIN_X = 3200;
+	private static final int TEARS_OF_GUTHIX_MAX_X = 3265;
+	private static final int TEARS_OF_GUTHIX_MIN_Y = 9479;
+	private static final int TEARS_OF_GUTHIX_MAX_Y = 9535;
 	private static final int HERB_SACK_CHECK_TIMEOUT_TICKS = 4;
+	private static final String[] UPDATE_SCROLL_NOTES = {
+		"Updated RuneLite price API compatibility for the latest client.",
+		"New per-skill panels track processed items, XP, XP/hr, output value, cost, profit, and GP/XP.",
+		"Farming helpers now include compost, needs-compost, protection checks, Anima timers, and permanent compost marker support.",
+		"Hunter now includes birdhouse stats, seeded birdhouse checks, and a configurable impling finder.",
+		"Herb sack viewer shows checked contents and estimated value on hover.",
+		"Tracker resets now refresh inventory baselines to avoid old bank or deposit movements being counted."
+	};
 
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
 		ComponentID.CHATBOX_TAB_CLAN,
@@ -198,6 +240,22 @@ public class SkillingToolkitPlugin extends Plugin
 		Skill.THIEVING,
 		Skill.WOODCUTTING
 	};
+
+	private static final Set<Skill> ITEM_ACTIVITY_SKILLS = Collections.unmodifiableSet(EnumSet.of(
+		Skill.CONSTRUCTION,
+		Skill.COOKING,
+		Skill.CRAFTING,
+		Skill.FIREMAKING,
+		Skill.FISHING,
+		Skill.FLETCHING,
+		Skill.HERBLORE,
+		Skill.HUNTER,
+		Skill.MINING,
+		Skill.RUNECRAFT,
+		Skill.SMITHING,
+		Skill.THIEVING,
+		Skill.WOODCUTTING
+	));
 
 	private static final String[] PATCH_NAME_PARTS = {
 		"allotment",
@@ -454,6 +512,8 @@ public class SkillingToolkitPlugin extends Plugin
 	private final Map<Integer, Long> ignoredInventoryReturns = new HashMap<>();
 	private final Map<Integer, Integer> ignoredInventoryReturnExpiryTicks = new HashMap<>();
 	private final List<PendingInventoryValueChange> pendingInventoryValueChanges = new ArrayList<>();
+	private final List<PendingProcessingInventoryChange> pendingProcessingInventoryChanges = new ArrayList<>();
+	private final List<PendingProcessingXp> pendingProcessingXp = new ArrayList<>();
 	private final List<PendingHerbCleaning> pendingHerbCleanings = new ArrayList<>();
 	private final HerbSackContents herbSackContents = new HerbSackContents();
 	private final EnumMap<HerbSackHerb, Integer> pendingHerbSackQuantities = new EnumMap<>(HerbSackHerb.class);
@@ -491,9 +551,23 @@ public class SkillingToolkitPlugin extends Plugin
 	@Inject
 	private HerbSackOverlay herbSackOverlay;
 
+	@Inject
+	private SkillingToolkitUpdatePanel updatePanel;
+
 	private InventorySpacesInfoBox inventorySpacesInfoBox;
+	private RunCountdownInfoBox herbRunCountdownInfoBox;
+	private RunCountdownInfoBox birdhouseRunCountdownInfoBox;
 	private SkillingToolkitPanel toolkitPanel;
 	private NavigationButton toolkitNavigationButton;
+	private volatile boolean started;
+	private int toolkitUiGeneration;
+	private volatile boolean updateScrollVisible;
+	private volatile boolean updateScrollDisplayScheduled;
+	private boolean updateScrollPreviewRequested;
+	private int updateScrollReadyTicks;
+	private int updateScrollGeneration;
+	private String pluginVersion;
+	private boolean tearsDarknessSuppressed;
 	private FarmingPatch currentFarmingPatch;
 	private FarmingPatch currentCompostPatch;
 	private WorldPoint lastPatchInteraction;
@@ -513,6 +587,8 @@ public class SkillingToolkitPlugin extends Plugin
 	private int pendingEquipmentTransferTick = Integer.MIN_VALUE;
 	private Skill activeSkillingSkill;
 	private int lastSkillingXpTick = Integer.MIN_VALUE;
+	private long birdhouseRunReadyAtMillis;
+	private long herbRunReadyAtMillis;
 	private boolean readingHerbSackContents;
 	private int herbSackCheckTick = Integer.MIN_VALUE;
 	private long profitValue;
@@ -520,6 +596,8 @@ public class SkillingToolkitPlugin extends Plugin
 	private long actionsValue;
 	private String lastTradeClockText = "";
 	private String lastProtectionDialogText = "";
+	private final Map<String, LastSeenImpling> lastSeenImplings = new HashMap<>();
+	private volatile List<TrackedImpling> trackedImplings = Collections.emptyList();
 
 	@Provides
 	SkillingToolkitConfig provideConfig(ConfigManager configManager)
@@ -587,39 +665,295 @@ public class SkillingToolkitPlugin extends Plugin
 		return System.getProperty("sun.java.command", "").contains("--developer-mode");
 	}
 
+	private void updateUpdateScroll()
+	{
+		if (config.dontShowUpdateScroll() && !updateScrollPreviewRequested)
+		{
+			return;
+		}
+
+		if (!isUpdateScrollWorldReady())
+		{
+			updateScrollReadyTicks = 0;
+			return;
+		}
+
+		if (updateScrollVisible || updateScrollDisplayScheduled)
+		{
+			return;
+		}
+
+		if (!updateScrollPreviewRequested
+			&& getPluginVersion().equals(configManager.getConfiguration(
+				SkillingToolkitConfig.GROUP,
+				SEEN_UPDATE_SCROLL_VERSION_KEY)))
+		{
+			return;
+		}
+
+		updateScrollReadyTicks++;
+		if (updateScrollReadyTicks < UPDATE_SCROLL_READY_TICKS)
+		{
+			return;
+		}
+
+		showUpdateScroll();
+	}
+
+	private boolean isUpdateScrollWorldReady()
+	{
+		if (!started || !isLoggedIn() || client.getLocalPlayer() == null || client.getCanvas() == null)
+		{
+			return false;
+		}
+
+		return !isClickToPlayScreenVisible();
+	}
+
+	private boolean isClickToPlayScreenVisible()
+	{
+		Widget clickToPlayRoot = client.getWidget(InterfaceID.WELCOME_SCREEN, 0);
+		return clickToPlayRoot != null
+			&& !clickToPlayRoot.isHidden()
+			&& clickToPlayRoot.getWidth() > 0
+			&& clickToPlayRoot.getHeight() > 0;
+	}
+
+	private void showUpdateScroll()
+	{
+		Canvas canvas = client.getCanvas();
+		if (canvas == null)
+		{
+			return;
+		}
+
+		String version = getPluginVersion();
+		int generation = ++updateScrollGeneration;
+		updateScrollDisplayScheduled = true;
+		SwingUtilities.invokeLater(() ->
+		{
+			if (!started || generation != updateScrollGeneration)
+			{
+				updateScrollDisplayScheduled = false;
+				return;
+			}
+
+			boolean shown = updatePanel.showPanel(
+				canvas,
+				version,
+				UPDATE_SCROLL_NOTES,
+				() -> dismissUpdateScroll(version),
+				() -> disableUpdateScroll(version));
+			updateScrollVisible = shown;
+			updateScrollDisplayScheduled = false;
+			if (!shown)
+			{
+				updateScrollReadyTicks = 0;
+			}
+		});
+	}
+
+	private void dismissUpdateScroll(String version)
+	{
+		updateScrollVisible = false;
+		updateScrollPreviewRequested = false;
+		updateScrollReadyTicks = 0;
+		configManager.setConfiguration(
+			SkillingToolkitConfig.GROUP,
+			SEEN_UPDATE_SCROLL_VERSION_KEY,
+			version);
+	}
+
+	private void disableUpdateScroll(String version)
+	{
+		configManager.setConfiguration(
+			SkillingToolkitConfig.GROUP,
+			"dontShowUpdateScroll",
+			true);
+		dismissUpdateScroll(version);
+		refreshOpenDontShowCheckbox();
+	}
+
+	private void refreshOpenDontShowCheckbox()
+	{
+		SwingUtilities.invokeLater(() ->
+		{
+			Canvas canvas = client.getCanvas();
+			JRootPane rootPane = canvas == null ? null : SwingUtilities.getRootPane(canvas);
+			if (rootPane != null)
+			{
+				selectDontShowCheckbox(rootPane);
+			}
+		});
+	}
+
+	private boolean selectDontShowCheckbox(Component component)
+	{
+		if (!(component instanceof Container))
+		{
+			return false;
+		}
+
+		Component[] children = ((Container) component).getComponents();
+		JLabel matchingLabel = null;
+		JCheckBox matchingCheckbox = null;
+		for (Component child : children)
+		{
+			if (child instanceof JLabel
+				&& "Don't show updates".equals(((JLabel) child).getText()))
+			{
+				matchingLabel = (JLabel) child;
+			}
+			else if (child instanceof JCheckBox)
+			{
+				matchingCheckbox = (JCheckBox) child;
+			}
+		}
+
+		if (matchingLabel != null && matchingCheckbox != null)
+		{
+			matchingCheckbox.setSelected(true);
+			matchingCheckbox.repaint();
+			return true;
+		}
+
+		for (Component child : children)
+		{
+			if (selectDontShowCheckbox(child))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private void migrateUpdateScrollSetting()
+	{
+		String oldValue = configManager.getConfiguration(
+			SkillingToolkitConfig.GROUP,
+			"showUpdateScroll");
+		String newValue = configManager.getConfiguration(
+			SkillingToolkitConfig.GROUP,
+			"dontShowUpdateScroll");
+		if (oldValue != null && newValue == null)
+		{
+			configManager.setConfiguration(
+				SkillingToolkitConfig.GROUP,
+				"dontShowUpdateScroll",
+				!Boolean.parseBoolean(oldValue));
+		}
+
+		configManager.unsetConfiguration(
+			SkillingToolkitConfig.GROUP,
+			"showUpdateScroll");
+	}
+
+	private void hideUpdateScroll()
+	{
+		updateScrollGeneration++;
+		updateScrollVisible = false;
+		updateScrollDisplayScheduled = false;
+		updateScrollPreviewRequested = false;
+		updatePanel.hidePanel();
+	}
+
+	private String getPluginVersion()
+	{
+		if (pluginVersion != null)
+		{
+			return pluginVersion;
+		}
+
+		PluginHubManifest.DisplayData displayData =
+			ExternalPluginManager.getDisplayData(SkillingToolkitPlugin.class);
+		if (displayData != null
+			&& displayData.getVersion() != null
+			&& !displayData.getVersion().isBlank())
+		{
+			pluginVersion = displayData.getVersion();
+			return pluginVersion;
+		}
+
+		try (InputStream stream = SkillingToolkitPlugin.class.getResourceAsStream("plugin.properties"))
+		{
+			if (stream != null)
+			{
+				Properties properties = new Properties();
+				properties.load(stream);
+				String resourceVersion = properties.getProperty("version");
+				if (resourceVersion != null && !resourceVersion.isBlank())
+				{
+					pluginVersion = resourceVersion;
+					return pluginVersion;
+				}
+			}
+		}
+		catch (IOException ignored)
+		{
+			// The scroll can still show "dev" if the bundled metadata is unavailable.
+		}
+
+		pluginVersion = "dev";
+		return pluginVersion;
+	}
+
 	@Override
 	protected void startUp()
 	{
+		started = true;
+		toolkitUiGeneration++;
 		overlayManager.add(overlay);
 		overlayManager.add(herbSackOverlay);
-		if (isLoggedIn())
-		{
-			ignoreInventoryTrackingBriefly();
-			syncInventoryTrackerBaseline();
-		}
 		loadCompostPatches();
 		loadNeedsCompostPatches();
 		loadProtectedPatches();
 		loadPatchTimers();
 		loadSeededBirdhouses();
+		loadRunCountdowns();
 		loadTrackerValues();
 		loadStatsValues();
+		migrateUpdateScrollSetting();
+		syncRunCountdownInfoBoxes();
 		addToolkitNavigation();
+		initializeClientStateLater();
+	}
+
+	private void initializeClientStateLater()
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (!started || !isLoggedIn())
+			{
+				return;
+			}
+
+			ignoreInventoryTrackingBriefly();
+			syncInventoryTrackerBaseline();
+			syncTrackerSkillBaselines();
+			ensureToolkitOwnerAvailable();
+			syncInventoryInfoBox();
+			updateChatTabTrackers();
+		});
 	}
 
 	@Override
 	protected void shutDown()
 	{
+		started = false;
 		overlayManager.remove(overlay);
 		overlayManager.remove(herbSackOverlay);
 		removeToolkitNavigation();
 		removeInventoryInfoBox();
-		restoreChatTabOverridesLater();
+		removeRunCountdownInfoBoxes();
+		hideUpdateScroll();
+		restoreTearsOfGuthixDarkness();
+		releaseToolkitUiOwnershipLater();
 		persistCompostPatches();
 		persistNeedsCompostPatches();
 		persistProtectedPatches();
 		persistPatchTimers();
 		persistSeededBirdhouses();
+		persistRunCountdowns();
 		currentFarmingPatch = null;
 		currentCompostPatch = null;
 		lastPatchInteraction = null;
@@ -636,6 +970,8 @@ public class SkillingToolkitPlugin extends Plugin
 		ignoredInventoryReturns.clear();
 		ignoredInventoryReturnExpiryTicks.clear();
 		pendingInventoryValueChanges.clear();
+		pendingProcessingInventoryChanges.clear();
+		pendingProcessingXp.clear();
 		pendingHerbCleanings.clear();
 		lastFarmingStatsRunAtMillis.clear();
 		pendingEquipmentTransferTick = Integer.MIN_VALUE;
@@ -643,12 +979,21 @@ public class SkillingToolkitPlugin extends Plugin
 		lastSkillingXpTick = Integer.MIN_VALUE;
 		resetPendingHerbSackCheck();
 		herbSackContents.forget();
+		lastSeenImplings.clear();
+		trackedImplings = Collections.emptyList();
 		inventoryTrackerBaselineReady = false;
 	}
 
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (TOOLKIT_UI_COORDINATION_GROUP.equals(event.getGroup())
+			&& TOOLKIT_UI_OWNER_KEY.equals(event.getKey()))
+		{
+			refreshToolkitUiOwnershipLater();
+			return;
+		}
+
 		if (!SkillingToolkitConfig.GROUP.equals(event.getGroup()))
 		{
 			return;
@@ -664,9 +1009,52 @@ public class SkillingToolkitPlugin extends Plugin
 			removeInventoryInfoBox();
 		}
 
+		if ("showImplingScanner".equals(event.getKey()) && !config.showImplingScanner())
+		{
+			lastSeenImplings.clear();
+			trackedImplings = Collections.emptyList();
+		}
+
+		if ("showHerbRunCountdown".equals(event.getKey()) || "showBirdhouseRunCountdown".equals(event.getKey()))
+		{
+			syncRunCountdownInfoBoxes();
+		}
+
+		if ("hideTearsOfGuthixDarkness".equals(event.getKey()))
+		{
+			syncTearsOfGuthixDarknessLater();
+		}
+
+		if ("rememberImplings".equals(event.getKey()) && !config.rememberImplings())
+		{
+			clearRememberedImplings();
+		}
+
 		if ("trackerMode".equals(event.getKey()))
 		{
 			loadTrackerValues();
+		}
+
+		if ("previewUpdateScroll".equals(event.getKey()) && config.previewUpdateScroll())
+		{
+			updateScrollPreviewRequested = true;
+			updateScrollReadyTicks = UPDATE_SCROLL_READY_TICKS;
+			configManager.setConfiguration(
+				SkillingToolkitConfig.GROUP,
+				"previewUpdateScroll",
+				false);
+		}
+
+		if ("dontShowUpdateScroll".equals(event.getKey()))
+		{
+			if (config.dontShowUpdateScroll())
+			{
+				hideUpdateScroll();
+			}
+			else
+			{
+				updateScrollReadyTicks = 0;
+			}
 		}
 
 		if ("resetSelectedTracker".equals(event.getKey()) && config.resetSelectedTracker())
@@ -701,6 +1089,8 @@ public class SkillingToolkitPlugin extends Plugin
 
 		if (isResetGameState(event.getGameState()))
 		{
+			hideUpdateScroll();
+			updateScrollReadyTicks = 0;
 			restoreChatTabOverrides();
 			removeInventoryInfoBox();
 			currentFarmingPatch = null;
@@ -718,12 +1108,16 @@ public class SkillingToolkitPlugin extends Plugin
 			ignoredInventoryReturns.clear();
 			ignoredInventoryReturnExpiryTicks.clear();
 			pendingInventoryValueChanges.clear();
+			pendingProcessingInventoryChanges.clear();
+			pendingProcessingXp.clear();
 			pendingHerbCleanings.clear();
 			lastFarmingStatsRunAtMillis.clear();
 			pendingEquipmentTransferTick = Integer.MIN_VALUE;
 			activeSkillingSkill = null;
 			lastSkillingXpTick = Integer.MIN_VALUE;
 			resetPendingHerbSackCheck();
+			lastSeenImplings.clear();
+			trackedImplings = Collections.emptyList();
 			inventoryTrackerBaselineReady = false;
 		}
 	}
@@ -750,6 +1144,7 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 
 		cleanupPendingInventoryValueChanges();
+		cleanupPendingProcessingActivity();
 		cleanupPendingHerbCleanings();
 		cleanupIgnoredInventoryReturns();
 		pruneReadyBirdhouses();
@@ -757,9 +1152,12 @@ public class SkillingToolkitPlugin extends Plugin
 		syncVisibleAnimaPatchTimer();
 		finishPendingHerbSackCheckIfReady();
 		syncInventoryInfoBox();
+		syncRunCountdownInfoBoxes();
 		syncTrackerSkillBaselines();
 		detectCropProtectionDialog();
 		syncVisibleFarmingPatchesAndReadyMarkers();
+		refreshTrackedImplings();
+		updateUpdateScroll();
 		refreshToolkitPanel();
 	}
 
@@ -768,10 +1166,12 @@ public class SkillingToolkitPlugin extends Plugin
 	{
 		if (!isLoggedIn())
 		{
+			resetTearsOfGuthixDarknessState();
 			restoreChatTabOverrides();
 			return;
 		}
 
+		syncTearsOfGuthixDarkness();
 		updateTradeButtonClock();
 		updateChatTabTrackers();
 	}
@@ -926,10 +1326,10 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
-		if ((config.clearCompostOnHarvest() || config.showPatchTimers() || config.showCropProtectionIndicator())
+		if ((shouldAutoClearCompostMarkers() || config.showPatchTimers() || config.showCropProtectionIndicator())
 			&& isPatchClearMessage(message))
 		{
-			clearLastPatch(shouldShowNeedsCompostAfterClear(message), config.clearCompostOnHarvest());
+			clearLastPatch(shouldShowNeedsCompostAfterClear(message), shouldAutoClearCompostMarkers());
 		}
 	}
 
@@ -948,7 +1348,7 @@ public class SkillingToolkitPlugin extends Plugin
 				activeProtectableFarmingPatches.add(activeProtectablePoint);
 			}
 
-			if ((config.clearCompostOnHarvest() || config.showPatchTimers() || config.showCropProtectionIndicator())
+			if ((shouldAutoClearCompostMarkers() || config.showPatchTimers() || config.showCropProtectionIndicator())
 				&& isHarvestableFarmingObject(composition))
 			{
 				markReadyPatch(point);
@@ -1038,9 +1438,207 @@ public class SkillingToolkitPlugin extends Plugin
 		return patch != null && patch.isAllotment();
 	}
 
+	List<TrackedImpling> getTrackedImplings()
+	{
+		return trackedImplings;
+	}
+
+	int getTrackedImplingCount()
+	{
+		int count = 0;
+		for (TrackedImpling impling : trackedImplings)
+		{
+			if (impling.isLive())
+			{
+				count++;
+			}
+		}
+
+		return count;
+	}
+
+	int getRememberedImplingCount()
+	{
+		int count = 0;
+		for (TrackedImpling impling : trackedImplings)
+		{
+			if (!impling.isLive())
+			{
+				count++;
+			}
+		}
+
+		return count;
+	}
+
+	String getNearestImplingSummary()
+	{
+		for (TrackedImpling impling : trackedImplings)
+		{
+			if (impling.isNearest())
+			{
+				String prefix = impling.isLive() ? "" : "Last ";
+				return prefix + impling.getType().getDisplayName() + " " + impling.getDistance() + " tiles";
+			}
+		}
+
+		return "-";
+	}
+
+	boolean supportsItemActivityStats(Skill skill)
+	{
+		return ITEM_ACTIVITY_SKILLS.contains(skill);
+	}
+
 	Set<WorldPoint> getSeededBirdhouses()
 	{
 		return seededBirdhouses;
+	}
+
+	long getBirdhouseRunReadyAtMillis()
+	{
+		return birdhouseRunReadyAtMillis;
+	}
+
+	long getHerbRunReadyAtMillis()
+	{
+		return herbRunReadyAtMillis;
+	}
+
+	private void refreshTrackedImplings()
+	{
+		if (!config.showImplingScanner())
+		{
+			lastSeenImplings.clear();
+			trackedImplings = Collections.emptyList();
+			return;
+		}
+
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			trackedImplings = Collections.emptyList();
+			return;
+		}
+
+		WorldPoint playerPoint = player.getWorldLocation();
+		long now = System.currentTimeMillis();
+		Set<String> liveKeys = new HashSet<>();
+		List<TrackedImpling> implings = new ArrayList<>();
+		for (NPC npc : client.getNpcs())
+		{
+			ImplingType type = ImplingType.fromNpcName(npc.getName());
+			if (type == null || !isImplingTypeEnabled(type))
+			{
+				continue;
+			}
+
+			WorldPoint npcPoint = npc.getWorldLocation();
+			if (npcPoint == null || npcPoint.getPlane() != playerPoint.getPlane())
+			{
+				continue;
+			}
+
+			String key = implingMemoryKey(type, npc.getIndex());
+			liveKeys.add(key);
+			lastSeenImplings.put(key, new LastSeenImpling(type, npcPoint, now));
+			implings.add(TrackedImpling.live(npc, type, npcPoint, playerPoint.distanceTo(npcPoint), now));
+		}
+
+		pruneLastSeenImplings(now);
+		if (config.rememberImplings())
+		{
+			for (Map.Entry<String, LastSeenImpling> entry : lastSeenImplings.entrySet())
+			{
+				if (liveKeys.contains(entry.getKey()))
+				{
+					continue;
+				}
+
+				LastSeenImpling lastSeen = entry.getValue();
+				if (lastSeen.worldPoint.getPlane() != playerPoint.getPlane() || !isImplingTypeEnabled(lastSeen.type))
+				{
+					continue;
+				}
+
+				implings.add(TrackedImpling.lastSeen(
+					lastSeen.type,
+					lastSeen.worldPoint,
+					playerPoint.distanceTo(lastSeen.worldPoint),
+					lastSeen.lastSeenMillis));
+			}
+		}
+
+		implings.sort(Comparator
+			.comparing(TrackedImpling::isLive).reversed()
+			.thenComparingInt(TrackedImpling::getDistance)
+			.thenComparing(impling -> impling.getType().ordinal()));
+		if (!implings.isEmpty())
+		{
+			implings.set(0, implings.get(0).withNearest(true));
+		}
+		trackedImplings = Collections.unmodifiableList(implings);
+	}
+
+	private void pruneLastSeenImplings(long now)
+	{
+		lastSeenImplings.entrySet().removeIf(entry ->
+		{
+			LastSeenImpling lastSeen = entry.getValue();
+			return now - lastSeen.lastSeenMillis > IMPLING_MEMORY_MILLIS || !isImplingTypeEnabled(lastSeen.type);
+		});
+	}
+
+	private void clearRememberedImplings()
+	{
+		lastSeenImplings.clear();
+		List<TrackedImpling> liveImplings = new ArrayList<>();
+		for (TrackedImpling impling : trackedImplings)
+		{
+			if (impling.isLive())
+			{
+				liveImplings.add(impling);
+			}
+		}
+		trackedImplings = Collections.unmodifiableList(liveImplings);
+	}
+
+	private static String implingMemoryKey(ImplingType type, int npcIndex)
+	{
+		return type.name() + ":" + npcIndex;
+	}
+
+	private boolean isImplingTypeEnabled(ImplingType type)
+	{
+		switch (type)
+		{
+			case BABY:
+				return config.implingBaby();
+			case YOUNG:
+				return config.implingYoung();
+			case GOURMET:
+				return config.implingGourmet();
+			case EARTH:
+				return config.implingEarth();
+			case ESSENCE:
+				return config.implingEssence();
+			case ECLECTIC:
+				return config.implingEclectic();
+			case NATURE:
+				return config.implingNature();
+			case MAGPIE:
+				return config.implingMagpie();
+			case NINJA:
+				return config.implingNinja();
+			case DRAGON:
+				return config.implingDragon();
+			case LUCKY:
+				return config.implingLucky();
+			case CRYSTAL:
+				return config.implingCrystal();
+			default:
+				return false;
+		}
 	}
 
 	boolean isFarmingPatch(GameObject object)
@@ -1092,6 +1690,82 @@ public class SkillingToolkitPlugin extends Plugin
 		{
 			infoBoxManager.removeInfoBox(inventorySpacesInfoBox);
 			inventorySpacesInfoBox = null;
+		}
+	}
+
+	private void syncRunCountdownInfoBoxes()
+	{
+		syncHerbRunCountdownInfoBox();
+		syncBirdhouseRunCountdownInfoBox();
+	}
+
+	private void syncHerbRunCountdownInfoBox()
+	{
+		if (!config.showHerbRunCountdown() || herbRunReadyAtMillis <= 0L)
+		{
+			removeHerbRunCountdownInfoBox();
+			return;
+		}
+
+		if (herbRunCountdownInfoBox == null)
+		{
+			herbRunCountdownInfoBox = new RunCountdownInfoBox(
+				"HERB_RUN_COUNTDOWN",
+				"Herb run",
+				itemManager.getImage(ItemID.GRIMY_RANARR_WEED),
+				this,
+				this::getHerbRunReadyAtMillis
+			);
+			infoBoxManager.addInfoBox(herbRunCountdownInfoBox);
+		}
+
+		herbRunCountdownInfoBox.setTooltip(herbRunCountdownInfoBox.buildTooltip());
+	}
+
+	private void syncBirdhouseRunCountdownInfoBox()
+	{
+		if (!config.showBirdhouseRunCountdown() || birdhouseRunReadyAtMillis <= 0L)
+		{
+			removeBirdhouseRunCountdownInfoBox();
+			return;
+		}
+
+		if (birdhouseRunCountdownInfoBox == null)
+		{
+			birdhouseRunCountdownInfoBox = new RunCountdownInfoBox(
+				"BIRDHOUSE_RUN_COUNTDOWN",
+				"Birdhouse run",
+				itemManager.getImage(ItemID.BIRD_HOUSE),
+				this,
+				this::getBirdhouseRunReadyAtMillis
+			);
+			infoBoxManager.addInfoBox(birdhouseRunCountdownInfoBox);
+		}
+
+		birdhouseRunCountdownInfoBox.setTooltip(birdhouseRunCountdownInfoBox.buildTooltip());
+	}
+
+	private void removeRunCountdownInfoBoxes()
+	{
+		removeHerbRunCountdownInfoBox();
+		removeBirdhouseRunCountdownInfoBox();
+	}
+
+	private void removeHerbRunCountdownInfoBox()
+	{
+		if (herbRunCountdownInfoBox != null)
+		{
+			infoBoxManager.removeInfoBox(herbRunCountdownInfoBox);
+			herbRunCountdownInfoBox = null;
+		}
+	}
+
+	private void removeBirdhouseRunCountdownInfoBox()
+	{
+		if (birdhouseRunCountdownInfoBox != null)
+		{
+			infoBoxManager.removeInfoBox(birdhouseRunCountdownInfoBox);
+			birdhouseRunCountdownInfoBox = null;
 		}
 	}
 
@@ -1165,6 +1839,8 @@ public class SkillingToolkitPlugin extends Plugin
 		{
 			recordIgnoredInventoryMovement(lastInventoryQuantities, currentQuantities);
 			pendingInventoryValueChanges.clear();
+			pendingProcessingInventoryChanges.clear();
+			pendingProcessingXp.clear();
 			lastInventoryQuantities.clear();
 			lastInventoryQuantities.putAll(currentQuantities);
 			return;
@@ -1188,11 +1864,14 @@ public class SkillingToolkitPlugin extends Plugin
 		if (shouldIgnoreSuspiciousInventoryValueChange(gainedQuantities, spentQuantities, gainedValue, spentValue))
 		{
 			pendingInventoryValueChanges.clear();
+			pendingProcessingInventoryChanges.clear();
+			pendingProcessingXp.clear();
 			lastInventoryQuantities.clear();
 			lastInventoryQuantities.putAll(currentQuantities);
 			return;
 		}
 
+		recordProcessingInventoryChange(gainedQuantities, spentQuantities);
 		queueOrCommitInventoryValueChange(gainedValue, spentValue, false);
 
 		lastInventoryQuantities.clear();
@@ -1329,7 +2008,7 @@ public class SkillingToolkitPlugin extends Plugin
 	static InventoryValueAdjustment neutralizeChargedItemChanges(
 		Map<Integer, Long> gainedQuantities,
 		Map<Integer, Long> spentQuantities,
-		IntUnaryOperator exactPrice,
+		IntToLongFunction exactPrice,
 		IntFunction<String> itemName)
 	{
 		long gainedValue = 0L;
@@ -1365,8 +2044,8 @@ public class SkillingToolkitPlugin extends Plugin
 				}
 
 				long valueDifference = getChargedItemValueDifference(
-					exactPrice.applyAsInt(spentItemId),
-					exactPrice.applyAsInt(gainedItemId),
+					exactPrice.applyAsLong(spentItemId),
+					exactPrice.applyAsLong(gainedItemId),
 					spentVariant.charges,
 					gainedVariant.charges,
 					quantity
@@ -1416,8 +2095,8 @@ public class SkillingToolkitPlugin extends Plugin
 	}
 
 	private static long getChargedItemValueDifference(
-		int spentPrice,
-		int gainedPrice,
+		long spentPrice,
+		long gainedPrice,
 		int spentCharges,
 		int gainedCharges,
 		long quantity)
@@ -1430,7 +2109,7 @@ public class SkillingToolkitPlugin extends Plugin
 			return exactDifference * quantity;
 		}
 
-		int knownPrice = spentPrice > 0 ? spentPrice : gainedPrice;
+		long knownPrice = spentPrice > 0 ? spentPrice : gainedPrice;
 		int knownCharges = spentPrice > 0 ? spentCharges : gainedCharges;
 		if (knownPrice <= 0 || knownCharges <= 0)
 		{
@@ -1480,6 +2159,192 @@ public class SkillingToolkitPlugin extends Plugin
 			spentValue,
 			countPositiveItemTypes(gainedQuantities),
 			countPositiveItemTypes(spentQuantities));
+	}
+
+	private void recordProcessingXp(Skill skill, long xp)
+	{
+		if (!supportsItemActivityStats(skill) || xp <= 0)
+		{
+			return;
+		}
+
+		if (skill == Skill.HUNTER && hasRecentBirdhouseXpInteraction())
+		{
+			return;
+		}
+
+		cleanupPendingProcessingActivity();
+		PendingProcessingInventoryChange inventoryChange = consumePendingProcessingInventoryChange();
+		if (inventoryChange == null)
+		{
+			pendingProcessingXp.add(new PendingProcessingXp(skill, xp, tickCount, System.currentTimeMillis()));
+			cleanupPendingProcessingActivity();
+			return;
+		}
+
+		addProcessingActivity(skill, xp, inventoryChange.gainedQuantities, inventoryChange.spentQuantities, inventoryChange.millis);
+	}
+
+	private void recordProcessingInventoryChange(Map<Integer, Long> gainedQuantities, Map<Integer, Long> spentQuantities)
+	{
+		if (!hasTrackableProcessingItems(gainedQuantities, spentQuantities))
+		{
+			return;
+		}
+
+		cleanupPendingProcessingActivity();
+		PendingProcessingXp xp = consumePendingProcessingXp();
+		if (xp == null)
+		{
+			pendingProcessingInventoryChanges.add(new PendingProcessingInventoryChange(
+				copyQuantityMap(gainedQuantities),
+				copyQuantityMap(spentQuantities),
+				tickCount,
+				System.currentTimeMillis()));
+			cleanupPendingProcessingActivity();
+			return;
+		}
+
+		addProcessingActivity(xp.skill, xp.xp, gainedQuantities, spentQuantities, xp.millis);
+	}
+
+	private void addProcessingActivity(
+		Skill skill,
+		long xp,
+		Map<Integer, Long> gainedQuantities,
+		Map<Integer, Long> spentQuantities,
+		long nowMillis)
+	{
+		ProcessingActivity activity = buildProcessingActivity(gainedQuantities, spentQuantities);
+		if (activity == null)
+		{
+			return;
+		}
+
+		addProcessingActivityStats(
+			skill,
+			activity.itemId,
+			activity.processed,
+			xp,
+			activity.inputCost,
+			activity.outputValue,
+			nowMillis);
+	}
+
+	private ProcessingActivity buildProcessingActivity(Map<Integer, Long> gainedQuantities, Map<Integer, Long> spentQuantities)
+	{
+		ProcessingItem primaryGained = selectPrimaryProcessingItem(gainedQuantities, true);
+		ProcessingItem primarySpent = selectPrimaryProcessingItem(spentQuantities, false);
+		if (primaryGained == null && primarySpent == null)
+		{
+			return null;
+		}
+
+		boolean hasOutput = primaryGained != null;
+		int itemId = hasOutput ? primaryGained.itemId : primarySpent.itemId;
+		long processed = hasOutput ? primaryGained.quantity : primarySpent.quantity;
+		long outputValue = getGainedInventoryChangeValue(gainedQuantities);
+		long inputCost = getSpentInventoryChangeValue(spentQuantities);
+		return new ProcessingActivity(itemId, processed, inputCost, outputValue);
+	}
+
+	private ProcessingItem selectPrimaryProcessingItem(Map<Integer, Long> quantities, boolean gained)
+	{
+		ProcessingItem selected = null;
+		for (Map.Entry<Integer, Long> entry : quantities.entrySet())
+		{
+			int itemId = itemManager.canonicalize(entry.getKey());
+			long quantity = Math.max(0L, entry.getValue());
+			if (quantity <= 0 || !isTrackableProcessingItem(itemId))
+			{
+				continue;
+			}
+
+			long value = gained ? getItemProfitValue(itemId, quantity) : getItemCostValue(itemId, quantity);
+			ProcessingItem candidate = new ProcessingItem(itemId, quantity, value);
+			if (selected == null || candidate.isBetterThan(selected))
+			{
+				selected = candidate;
+			}
+		}
+
+		return selected;
+	}
+
+	private boolean hasTrackableProcessingItems(Map<Integer, Long> gainedQuantities, Map<Integer, Long> spentQuantities)
+	{
+		return hasTrackableProcessingItems(gainedQuantities) || hasTrackableProcessingItems(spentQuantities);
+	}
+
+	private boolean hasTrackableProcessingItems(Map<Integer, Long> quantities)
+	{
+		for (Map.Entry<Integer, Long> entry : quantities.entrySet())
+		{
+			if (entry.getValue() > 0 && isTrackableProcessingItem(entry.getKey()))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private boolean isTrackableProcessingItem(int itemId)
+	{
+		int canonicalItemId = itemManager.canonicalize(itemId);
+		return canonicalItemId > 0
+			&& canonicalItemId != ItemID.COINS_995
+			&& canonicalItemId != ItemID.PLATINUM_TOKEN;
+	}
+
+	private PendingProcessingInventoryChange consumePendingProcessingInventoryChange()
+	{
+		for (int index = 0; index < pendingProcessingInventoryChanges.size(); index++)
+		{
+			PendingProcessingInventoryChange change = pendingProcessingInventoryChanges.get(index);
+			if (tickCount - change.tick <= PENDING_PROCESSING_ACTIVITY_TICKS)
+			{
+				pendingProcessingInventoryChanges.remove(index);
+				return change;
+			}
+		}
+
+		return null;
+	}
+
+	private PendingProcessingXp consumePendingProcessingXp()
+	{
+		for (int index = 0; index < pendingProcessingXp.size(); index++)
+		{
+			PendingProcessingXp xp = pendingProcessingXp.get(index);
+			if (tickCount - xp.tick <= PENDING_PROCESSING_ACTIVITY_TICKS)
+			{
+				pendingProcessingXp.remove(index);
+				return xp;
+			}
+		}
+
+		return null;
+	}
+
+	private void cleanupPendingProcessingActivity()
+	{
+		pendingProcessingInventoryChanges.removeIf(change -> tickCount - change.tick > PENDING_PROCESSING_ACTIVITY_TICKS);
+		pendingProcessingXp.removeIf(xp -> tickCount - xp.tick > PENDING_PROCESSING_ACTIVITY_TICKS);
+	}
+
+	private static Map<Integer, Long> copyQuantityMap(Map<Integer, Long> quantities)
+	{
+		Map<Integer, Long> copy = new HashMap<>();
+		for (Map.Entry<Integer, Long> entry : quantities.entrySet())
+		{
+			if (entry.getValue() > 0)
+			{
+				copy.put(entry.getKey(), entry.getValue());
+			}
+		}
+
+		return copy;
 	}
 
 	static boolean isSuspiciousInventoryValueReplacement(long gainedValue, long spentValue, int gainedTypes, int spentTypes)
@@ -1671,7 +2536,7 @@ public class SkillingToolkitPlugin extends Plugin
 			return quantity * 1000L;
 		}
 
-		int price = getExactItemPrice(canonicalItemId);
+		long price = getExactItemPrice(canonicalItemId);
 		if (price <= 0)
 		{
 			int variationItemId = ItemVariationMapping.map(canonicalItemId);
@@ -1683,7 +2548,7 @@ public class SkillingToolkitPlugin extends Plugin
 		return price > 0 ? (long) price * quantity : 0L;
 	}
 
-	private int getExactItemPrice(int itemId)
+	private long getExactItemPrice(int itemId)
 	{
 		return getConfiguredItemPrice(itemManager.canonicalize(itemId));
 	}
@@ -1706,7 +2571,7 @@ public class SkillingToolkitPlugin extends Plugin
 		return name == null || name.isBlank() ? "Item " + itemId : name;
 	}
 
-	private int getConfiguredItemPrice(int itemId)
+	private long getConfiguredItemPrice(int itemId)
 	{
 		if (config.priceSource() == ToolkitPriceSource.RUNELITE)
 		{
@@ -1890,6 +2755,7 @@ public class SkillingToolkitPlugin extends Plugin
 		{
 			addBirdhouseXpStats(gainedXp);
 		}
+		recordProcessingXp(skill, gainedXp);
 		commitPendingInventoryValueChanges();
 		if (isForeverTrackerMode())
 		{
@@ -1936,7 +2802,6 @@ public class SkillingToolkitPlugin extends Plugin
 		costValue = isForeverTrackerMode() ? parseLongConfig(config.savedCostTrackerValue()) : 0L;
 		actionsValue = isForeverTrackerMode() ? parseLongConfig(config.savedActionsTrackerValue()) : 0L;
 		loadChatTabTrackerOrder();
-		syncTrackerSkillBaselines();
 		trackerValuesLoaded = true;
 	}
 
@@ -2088,6 +2953,23 @@ public class SkillingToolkitPlugin extends Plugin
 		for (SkillingToolkitStatsPeriod period : SkillingToolkitStatsPeriod.values())
 		{
 			getStats(period).addFarmingActivity(type, seedsUsed, seedCost, harvested, harvestValue, countRun);
+			persistStatsValue(period);
+		}
+		refreshToolkitPanel();
+	}
+
+	private void addProcessingActivityStats(
+		Skill skill,
+		int itemId,
+		long processed,
+		long xp,
+		long inputCost,
+		long outputValue,
+		long nowMillis)
+	{
+		for (SkillingToolkitStatsPeriod period : SkillingToolkitStatsPeriod.values())
+		{
+			getStats(period).addActivity(skill, itemId, processed, xp, inputCost, outputValue, nowMillis);
 			persistStatsValue(period);
 		}
 		refreshToolkitPanel();
@@ -2346,6 +3228,16 @@ public class SkillingToolkitPlugin extends Plugin
 		profitValue = 0L;
 		ignoredInventoryReturns.clear();
 		ignoredInventoryReturnExpiryTicks.clear();
+		pendingInventoryValueChanges.clear();
+		pendingProcessingInventoryChanges.clear();
+		pendingProcessingXp.clear();
+		clientThread.invokeLater(() ->
+		{
+			if (started && isLoggedIn())
+			{
+				syncInventoryTrackerBaseline();
+			}
+		});
 		persistProfitTrackerValue();
 	}
 
@@ -2354,6 +3246,16 @@ public class SkillingToolkitPlugin extends Plugin
 		costValue = 0L;
 		ignoredInventoryReturns.clear();
 		ignoredInventoryReturnExpiryTicks.clear();
+		pendingInventoryValueChanges.clear();
+		pendingProcessingInventoryChanges.clear();
+		pendingProcessingXp.clear();
+		clientThread.invokeLater(() ->
+		{
+			if (started && isLoggedIn())
+			{
+				syncInventoryTrackerBaseline();
+			}
+		});
 		persistCostTrackerValue();
 	}
 
@@ -2418,15 +3320,19 @@ public class SkillingToolkitPlugin extends Plugin
 	private void resetPatchTimers()
 	{
 		patchTimers.clear();
+		herbRunReadyAtMillis = 0L;
 		persistPatchTimers();
+		persistHerbRunReadyAtMillis();
 	}
 
 	private void resetBirdhouseMarkers()
 	{
 		seededBirdhouses.clear();
 		birdhouseReadyAtMillis.clear();
+		birdhouseRunReadyAtMillis = 0L;
 		lastBirdhouseInteraction = null;
 		persistSeededBirdhouses();
+		persistBirdhouseRunReadyAtMillis();
 	}
 
 	String getQuickXpText()
@@ -2490,6 +3396,17 @@ public class SkillingToolkitPlugin extends Plugin
 		setConfigBoolean("showPatchTimers", enabled);
 	}
 
+	boolean isRunCountdownsQuickEnabled()
+	{
+		return config.showHerbRunCountdown() || config.showBirdhouseRunCountdown();
+	}
+
+	void setRunCountdownsQuickEnabled(boolean enabled)
+	{
+		setConfigBoolean("showHerbRunCountdown", enabled);
+		setConfigBoolean("showBirdhouseRunCountdown", enabled);
+	}
+
 	boolean isBirdhouseQuickEnabled()
 	{
 		return config.showBirdhouseSeedIndicator();
@@ -2498,6 +3415,85 @@ public class SkillingToolkitPlugin extends Plugin
 	void setBirdhouseQuickEnabled(boolean enabled)
 	{
 		setConfigBoolean("showBirdhouseSeedIndicator", enabled);
+	}
+
+	boolean shouldShowHerbRunCountdown()
+	{
+		return config.showHerbRunCountdown();
+	}
+
+	boolean shouldShowBirdhouseRunCountdown()
+	{
+		return config.showBirdhouseRunCountdown();
+	}
+
+	boolean isImplingScannerQuickEnabled()
+	{
+		return config.showImplingScanner();
+	}
+
+	void setImplingScannerQuickEnabled(boolean enabled)
+	{
+		setConfigBoolean("showImplingScanner", enabled);
+		if (!enabled)
+		{
+			lastSeenImplings.clear();
+			trackedImplings = Collections.emptyList();
+		}
+	}
+
+	boolean isImplingPathQuickEnabled()
+	{
+		return config.showImplingPath();
+	}
+
+	void setImplingPathQuickEnabled(boolean enabled)
+	{
+		setConfigBoolean("showImplingPath", enabled);
+	}
+
+	boolean isImplingFinderBoxQuickEnabled()
+	{
+		return config.showImplingFinderBox();
+	}
+
+	void setImplingFinderBoxQuickEnabled(boolean enabled)
+	{
+		setConfigBoolean("showImplingFinderBox", enabled);
+	}
+
+	boolean isImplingPulseQuickEnabled()
+	{
+		return config.flashImplingTarget();
+	}
+
+	void setImplingPulseQuickEnabled(boolean enabled)
+	{
+		setConfigBoolean("flashImplingTarget", enabled);
+	}
+
+	boolean isImplingMemoryQuickEnabled()
+	{
+		return config.rememberImplings();
+	}
+
+	void setImplingMemoryQuickEnabled(boolean enabled)
+	{
+		setConfigBoolean("rememberImplings", enabled);
+		if (!enabled)
+		{
+			clearRememberedImplings();
+		}
+	}
+
+	boolean isImplingTypeQuickEnabled(ImplingType type)
+	{
+		return isImplingTypeEnabled(type);
+	}
+
+	void setImplingTypeQuickEnabled(ImplingType type, boolean enabled)
+	{
+		setConfigBoolean(type.getConfigKey(), enabled);
 	}
 
 	boolean isInventoryQuickEnabled()
@@ -2577,6 +3573,18 @@ public class SkillingToolkitPlugin extends Plugin
 
 		getStats(period).resetGp();
 		persistStatsValue(period);
+		ignoredInventoryReturns.clear();
+		ignoredInventoryReturnExpiryTicks.clear();
+		pendingInventoryValueChanges.clear();
+		pendingProcessingInventoryChanges.clear();
+		pendingProcessingXp.clear();
+		clientThread.invokeLater(() ->
+		{
+			if (started && isLoggedIn())
+			{
+				syncInventoryTrackerBaseline();
+			}
+		});
 		refreshToolkitPanel();
 	}
 
@@ -2713,7 +3721,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void updateTradeButtonClock()
 	{
-		if (!config.tradeButtonClock())
+		if (!isToolkitUiReady() || !config.tradeButtonClock())
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
 			return;
@@ -2728,14 +3736,7 @@ public class SkillingToolkitPlugin extends Plugin
 	{
 		if (!isToolkitUiReady())
 		{
-			if (isOtherToolkitUiOwnerActive())
-			{
-				forgetChatTabOverrideState();
-			}
-			else
-			{
-				restoreChatTabTrackerOverrides();
-			}
+			restoreChatTabTrackerOverrides();
 			return;
 		}
 
@@ -3227,9 +4228,53 @@ public class SkillingToolkitPlugin extends Plugin
 		clientThread.invokeLater(this::updateChatTabTrackers);
 	}
 
-	private void restoreChatTabOverridesLater()
+	private void refreshToolkitUiOwnershipLater()
 	{
-		clientThread.invokeLater(this::restoreChatTabOverrides);
+		clientThread.invokeLater(() ->
+		{
+			if (!started)
+			{
+				return;
+			}
+
+			syncInventoryInfoBox();
+			updateChatTabTrackers();
+		});
+	}
+
+	private void releaseToolkitUiOwnershipLater()
+	{
+		int generation = toolkitUiGeneration;
+		clientThread.invokeLater(() ->
+		{
+			if (started || generation != toolkitUiGeneration)
+			{
+				return;
+			}
+
+			restoreChatTabOverrides();
+			removeInventoryInfoBox();
+			if (!ownsToolkitUi())
+			{
+				return;
+			}
+
+			if (isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
+			{
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, TOOLKIT_UI_SOURCE_ACTIVITY);
+				configManager.setConfiguration(
+					TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, TOOLKIT_UI_OWNER_PVM);
+			}
+			else
+			{
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY);
+				configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY);
+			}
+		});
 	}
 
 	private void restoreChatTabOverride(int componentId)
@@ -3394,6 +4439,8 @@ public class SkillingToolkitPlugin extends Plugin
 	{
 		inventoryTrackerIgnoreTicks = INVENTORY_TRACKER_IGNORE_TICKS;
 		pendingInventoryValueChanges.clear();
+		pendingProcessingInventoryChanges.clear();
+		pendingProcessingXp.clear();
 		pendingHerbCleanings.clear();
 	}
 
@@ -3401,6 +4448,8 @@ public class SkillingToolkitPlugin extends Plugin
 	{
 		inventoryTrackerIgnoreTicks = Math.max(inventoryTrackerIgnoreTicks, STORAGE_INVENTORY_TRACKER_IGNORE_TICKS);
 		pendingInventoryValueChanges.clear();
+		pendingProcessingInventoryChanges.clear();
+		pendingProcessingXp.clear();
 		pendingHerbCleanings.clear();
 	}
 
@@ -3557,7 +4606,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 		lastHarvestSceneScanTick = tickCount;
 		Set<WorldPoint> patchPoints = scanVisibleFarmingPatchPoints(
-			config.clearCompostOnHarvest() || config.showPatchTimers() || config.showCropProtectionIndicator());
+			shouldAutoClearCompostMarkers() || config.showPatchTimers() || config.showCropProtectionIndicator());
 		visibleFarmingPatches.clear();
 		visibleFarmingPatches.addAll(patchPoints);
 	}
@@ -3775,6 +4824,11 @@ public class SkillingToolkitPlugin extends Plugin
 		if (seedsUsed <= 0 && harvested <= 0)
 		{
 			return;
+		}
+
+		if (type == FarmingActivityType.HERBS && seedsUsed > 0)
+		{
+			updateHerbRunCountdown(System.currentTimeMillis() + HERB_RUN_DURATION_MILLIS);
 		}
 
 		addFarmingActivityStats(type, seedsUsed, seedCost, harvested, harvestValue, shouldCountFarmingRun(type));
@@ -4059,8 +5113,10 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
+		long readyAtMillis = System.currentTimeMillis() + BIRDHOUSE_DURATION_MILLIS;
 		seededBirdhouses.add(birdhousePoint);
-		birdhouseReadyAtMillis.put(birdhousePoint, System.currentTimeMillis() + BIRDHOUSE_DURATION_MILLIS);
+		birdhouseReadyAtMillis.put(birdhousePoint, readyAtMillis);
+		updateBirdhouseRunCountdown(readyAtMillis);
 		persistSeededBirdhouses();
 	}
 
@@ -4511,7 +5567,7 @@ public class SkillingToolkitPlugin extends Plugin
 			persistPatchTimers();
 		}
 
-		if (!config.clearCompostOnHarvest())
+		if (!shouldAutoClearCompostMarkers())
 		{
 			return;
 		}
@@ -4527,6 +5583,16 @@ public class SkillingToolkitPlugin extends Plugin
 		{
 			persistNeedsCompostPatches();
 		}
+	}
+
+	private boolean shouldAutoClearCompostMarkers()
+	{
+		return shouldAutoClearCompostMarkers(config.clearCompostOnHarvest(), config.permanentCompostMarkers());
+	}
+
+	static boolean shouldAutoClearCompostMarkers(boolean clearCompostOnHarvest, boolean permanentCompostMarkers)
+	{
+		return clearCompostOnHarvest && !permanentCompostMarkers;
 	}
 
 	private boolean removeTrackedMarker(Set<WorldPoint> points, WorldPoint anchor)
@@ -4971,6 +6037,58 @@ public class SkillingToolkitPlugin extends Plugin
 		configManager.setConfiguration(SkillingToolkitConfig.GROUP, SAVED_SEEDED_BIRDHOUSES_KEY, savedBirdhouses.toString());
 	}
 
+	private void loadRunCountdowns()
+	{
+		birdhouseRunReadyAtMillis = Math.max(0L, parseLongConfig(config.savedBirdhouseRunReadyAtMillis()));
+		herbRunReadyAtMillis = Math.max(0L, parseLongConfig(config.savedHerbRunReadyAtMillis()));
+	}
+
+	private void persistRunCountdowns()
+	{
+		persistBirdhouseRunReadyAtMillis();
+		persistHerbRunReadyAtMillis();
+	}
+
+	private void persistBirdhouseRunReadyAtMillis()
+	{
+		configManager.setConfiguration(
+			SkillingToolkitConfig.GROUP,
+			SAVED_BIRDHOUSE_RUN_READY_AT_KEY,
+			Long.toString(Math.max(0L, birdhouseRunReadyAtMillis))
+		);
+	}
+
+	private void persistHerbRunReadyAtMillis()
+	{
+		configManager.setConfiguration(
+			SkillingToolkitConfig.GROUP,
+			SAVED_HERB_RUN_READY_AT_KEY,
+			Long.toString(Math.max(0L, herbRunReadyAtMillis))
+		);
+	}
+
+	private void updateBirdhouseRunCountdown(long readyAtMillis)
+	{
+		if (readyAtMillis <= 0L || readyAtMillis <= birdhouseRunReadyAtMillis)
+		{
+			return;
+		}
+
+		birdhouseRunReadyAtMillis = readyAtMillis;
+		persistBirdhouseRunReadyAtMillis();
+	}
+
+	private void updateHerbRunCountdown(long readyAtMillis)
+	{
+		if (readyAtMillis <= 0L || readyAtMillis <= herbRunReadyAtMillis)
+		{
+			return;
+		}
+
+		herbRunReadyAtMillis = readyAtMillis;
+		persistHerbRunReadyAtMillis();
+	}
+
 	private WorldPoint parseSavedPatchPoint(String savedPatch)
 	{
 		String[] parts = savedPatch.split(",", 3);
@@ -5293,7 +6411,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void clearReadyPatchMarkerFromMenu(String optionText, String targetText, int sceneX, int sceneY, FarmingPatch menuPatch)
 	{
-		if (!config.clearCompostOnHarvest() && !config.showPatchTimers() && !config.showCropProtectionIndicator())
+		if (!shouldAutoClearCompostMarkers() && !config.showPatchTimers() && !config.showCropProtectionIndicator())
 		{
 			return;
 		}
@@ -5690,9 +6808,9 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void markSkillingActivity()
 	{
-		if (!ownsToolkitUi() && !isRecentToolkitOwner(TOOLKIT_UI_OWNER_PVM, TOOLKIT_UI_OWNER_GRACE_TICKS))
+		if (!ownsToolkitUi() && !isToolkitUiManuallySelected())
 		{
-			setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING);
+			setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING, TOOLKIT_UI_SOURCE_ACTIVITY);
 		}
 	}
 
@@ -5714,7 +6832,7 @@ public class SkillingToolkitPlugin extends Plugin
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY, Integer.toString(currentTick));
 		boolean skillingEnabled = isToolkitPluginEnabled(SKILLING_PLUGIN_CLASS_NAME);
-		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME);
+		boolean pvmEnabled = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES);
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
 		String nextOwner;
 		if (skillingEnabled && pvmEnabled)
@@ -5726,7 +6844,7 @@ public class SkillingToolkitPlugin extends Plugin
 			nextOwner = pvmEnabled ? TOOLKIT_UI_OWNER_PVM : TOOLKIT_UI_OWNER_SKILLING;
 		}
 
-		setToolkitUiOwner(nextOwner);
+		setToolkitUiOwner(nextOwner, TOOLKIT_UI_SOURCE_MANUAL);
 		return true;
 	}
 
@@ -5740,8 +6858,20 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void ensureToolkitOwnerAvailable()
 	{
+		String sessionId = getToolkitUiSessionId();
+		String savedSessionId = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY);
+		if (!sessionId.equals(savedSessionId))
+		{
+			configManager.unsetConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_LAST_TOGGLE_TICK_KEY);
+			String initialOwner = isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES)
+				? TOOLKIT_UI_OWNER_PVM
+				: TOOLKIT_UI_OWNER_SKILLING;
+			setToolkitUiOwner(initialOwner, TOOLKIT_UI_SOURCE_ACTIVITY);
+			return;
+		}
+
 		String owner = configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY);
-		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME))
+		if (TOOLKIT_UI_OWNER_PVM.equals(owner) && isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
 		{
 			return;
 		}
@@ -5751,32 +6881,63 @@ public class SkillingToolkitPlugin extends Plugin
 			return;
 		}
 
-		setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING);
+		setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING, TOOLKIT_UI_SOURCE_ACTIVITY);
 	}
 
-	private boolean isToolkitPluginEnabled(String className)
+	private boolean isToolkitPluginEnabled(String... classNames)
 	{
 		for (Plugin plugin : pluginManager.getPlugins())
 		{
-			if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginEnabled(plugin))
+			for (String className : classNames)
 			{
-				return true;
+				if (className.equals(plugin.getClass().getName()) && pluginManager.isPluginActive(plugin))
+				{
+					return true;
+				}
 			}
 		}
 
 		return false;
 	}
 
-	private void setToolkitUiOwner(String owner)
+	private void setToolkitUiOwner(String owner, String source)
 	{
-		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SESSION_KEY, getToolkitUiSessionId());
 		configManager.setConfiguration(
 			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY, Integer.toString(client.getTickCount()));
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY, source);
+		configManager.setConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY, owner);
 		clientThread.invokeLater(() ->
 		{
+			if (!started)
+			{
+				return;
+			}
+
 			syncInventoryInfoBox();
 			updateChatTabTrackers();
 		});
+	}
+
+	private boolean isToolkitUiManuallySelected()
+	{
+		return TOOLKIT_UI_SOURCE_MANUAL.equals(configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_SOURCE_KEY));
+	}
+
+	private static String getToolkitUiSessionId()
+	{
+		synchronized (System.getProperties())
+		{
+			String sessionId = System.getProperty(TOOLKIT_UI_SESSION_PROPERTY);
+			if (sessionId == null || sessionId.isBlank())
+			{
+				sessionId = java.util.UUID.randomUUID().toString();
+				System.setProperty(TOOLKIT_UI_SESSION_PROPERTY, sessionId);
+			}
+
+			return sessionId;
+		}
 	}
 
 	private boolean ownsToolkitUi()
@@ -5787,19 +6948,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private boolean isOtherToolkitUiOwnerActive()
 	{
 		return TOOLKIT_UI_OWNER_PVM.equals(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY))
-			&& isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAME);
-	}
-
-	private boolean isRecentToolkitOwner(String owner, int graceTicks)
-	{
-		if (!owner.equals(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_KEY)))
-		{
-			return false;
-		}
-
-		long ownerTick = parseLongConfig(configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_OWNER_TICK_KEY));
-		int currentTick = client.getTickCount();
-		return ownerTick <= currentTick && currentTick - ownerTick <= graceTicks;
+			&& isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES);
 	}
 
 	private boolean isToolkitUiReady()
@@ -5823,6 +6972,82 @@ public class SkillingToolkitPlugin extends Plugin
 	private boolean isLoggedIn()
 	{
 		return client.getGameState() == GameState.LOGGED_IN;
+	}
+
+	private void syncTearsOfGuthixDarknessLater()
+	{
+		clientThread.invokeLater(() ->
+		{
+			if (started)
+			{
+				syncTearsOfGuthixDarkness();
+			}
+		});
+	}
+
+	private void syncTearsOfGuthixDarkness()
+	{
+		if (!isLoggedIn())
+		{
+			resetTearsOfGuthixDarknessState();
+			return;
+		}
+
+		if (!config.hideTearsOfGuthixDarkness() || !isInTearsOfGuthixArea())
+		{
+			restoreTearsOfGuthixDarkness();
+			return;
+		}
+
+		tearsDarknessSuppressed = true;
+		if (client.getVarbitValue(VarbitID.DARKNESS_LEVEL) != 0)
+		{
+			client.setVarbit(VarbitID.DARKNESS_LEVEL, 0);
+		}
+	}
+
+	private void restoreTearsOfGuthixDarkness()
+	{
+		if (!tearsDarknessSuppressed)
+		{
+			return;
+		}
+
+		tearsDarknessSuppressed = false;
+		if (isLoggedIn())
+		{
+			int serverDarkness = client.getServerVarbitValue(VarbitID.DARKNESS_LEVEL);
+			if (client.getVarbitValue(VarbitID.DARKNESS_LEVEL) != serverDarkness)
+			{
+				client.setVarbit(VarbitID.DARKNESS_LEVEL, serverDarkness);
+			}
+		}
+	}
+
+	private void resetTearsOfGuthixDarknessState()
+	{
+		tearsDarknessSuppressed = false;
+	}
+
+	private boolean isInTearsOfGuthixArea()
+	{
+		Player player = client.getLocalPlayer();
+		return player != null && isTearsOfGuthixArea(player.getWorldLocation());
+	}
+
+	static boolean isTearsOfGuthixArea(WorldPoint point)
+	{
+		if (point == null)
+		{
+			return false;
+		}
+
+		int x = point.getX();
+		int y = point.getY();
+		return x >= TEARS_OF_GUTHIX_MIN_X
+			&& x <= TEARS_OF_GUTHIX_MAX_X
+			&& y >= TEARS_OF_GUTHIX_MIN_Y
+			&& y <= TEARS_OF_GUTHIX_MAX_Y;
 	}
 
 	private boolean isResetGameState(GameState gameState)
@@ -5882,6 +7107,101 @@ public class SkillingToolkitPlugin extends Plugin
 			this.gainedValue = gainedValue;
 			this.spentValue = spentValue;
 			this.tick = tick;
+		}
+	}
+
+	private static final class PendingProcessingInventoryChange
+	{
+		private final Map<Integer, Long> gainedQuantities;
+		private final Map<Integer, Long> spentQuantities;
+		private final int tick;
+		private final long millis;
+
+		private PendingProcessingInventoryChange(
+			Map<Integer, Long> gainedQuantities,
+			Map<Integer, Long> spentQuantities,
+			int tick,
+			long millis)
+		{
+			this.gainedQuantities = gainedQuantities;
+			this.spentQuantities = spentQuantities;
+			this.tick = tick;
+			this.millis = millis;
+		}
+	}
+
+	private static final class PendingProcessingXp
+	{
+		private final Skill skill;
+		private final long xp;
+		private final int tick;
+		private final long millis;
+
+		private PendingProcessingXp(Skill skill, long xp, int tick, long millis)
+		{
+			this.skill = skill;
+			this.xp = xp;
+			this.tick = tick;
+			this.millis = millis;
+		}
+	}
+
+	private static final class ProcessingActivity
+	{
+		private final int itemId;
+		private final long processed;
+		private final long inputCost;
+		private final long outputValue;
+
+		private ProcessingActivity(int itemId, long processed, long inputCost, long outputValue)
+		{
+			this.itemId = itemId;
+			this.processed = processed;
+			this.inputCost = inputCost;
+			this.outputValue = outputValue;
+		}
+	}
+
+	private static final class ProcessingItem
+	{
+		private final int itemId;
+		private final long quantity;
+		private final long value;
+
+		private ProcessingItem(int itemId, long quantity, long value)
+		{
+			this.itemId = itemId;
+			this.quantity = quantity;
+			this.value = value;
+		}
+
+		private boolean isBetterThan(ProcessingItem other)
+		{
+			if (value != other.value)
+			{
+				return value > other.value;
+			}
+
+			if (quantity != other.quantity)
+			{
+				return quantity > other.quantity;
+			}
+
+			return itemId < other.itemId;
+		}
+	}
+
+	private static final class LastSeenImpling
+	{
+		private final ImplingType type;
+		private final WorldPoint worldPoint;
+		private final long lastSeenMillis;
+
+		private LastSeenImpling(ImplingType type, WorldPoint worldPoint, long lastSeenMillis)
+		{
+			this.type = type;
+			this.worldPoint = worldPoint;
+			this.lastSeenMillis = lastSeenMillis;
 		}
 	}
 

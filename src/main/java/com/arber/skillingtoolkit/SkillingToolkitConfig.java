@@ -45,6 +45,13 @@ public interface SkillingToolkitConfig extends Config
 	)
 	String trackerSection = "trackerSection";
 
+	@ConfigSection(
+		name = "Updates",
+		description = "Configure Skilling Toolkit update notes.",
+		position = 5
+	)
+	String updateSection = "updateSection";
+
 	@ConfigItem(
 		keyName = "markerResetTarget",
 		name = "Reset markers",
@@ -106,11 +113,23 @@ public interface SkillingToolkitConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "clearCompostOnHarvest",
-		name = "Clear on harvest",
-		description = "Clear the compost marker when harvesting or clearing the same patch.",
+		keyName = "permanentCompostMarkers",
+		name = "Permanent compost markers",
+		description = "Keep compost markers after a patch becomes ready or reloads; markers are only changed by needs-compost checks or manual reset.",
 		section = farmingSection,
 		position = 3
+	)
+	default boolean permanentCompostMarkers()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "clearCompostOnHarvest",
+		name = "Clear on harvest",
+		description = "Clear the compost marker when harvesting or clearing the same patch. Ignored when permanent compost markers are enabled.",
+		section = farmingSection,
+		position = 4
 	)
 	default boolean clearCompostOnHarvest()
 	{
@@ -122,7 +141,7 @@ public interface SkillingToolkitConfig extends Config
 		name = "Crop protection indicator",
 		description = "Show a green check on farming patches after you pay a gardener to protect crops.",
 		section = farmingSection,
-		position = 4
+		position = 5
 	)
 	default boolean showCropProtectionIndicator()
 	{
@@ -134,9 +153,21 @@ public interface SkillingToolkitConfig extends Config
 		name = "Anima patch timer",
 		description = "Show Attas, Iasor, and Kronos decay timers as hours and minutes on the Anima patch.",
 		section = farmingSection,
-		position = 5
+		position = 6
 	)
 	default boolean showPatchTimers()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showHerbRunCountdown",
+		name = "Herb run countdown",
+		description = "Show a panel countdown for herb runs. The timer counts from the latest planted herb seed.",
+		section = farmingSection,
+		position = 7
+	)
+	default boolean showHerbRunCountdown()
 	{
 		return true;
 	}
@@ -151,6 +182,222 @@ public interface SkillingToolkitConfig extends Config
 	default boolean showBirdhouseSeedIndicator()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showBirdhouseRunCountdown",
+		name = "Birdhouse countdown",
+		description = "Show a panel countdown for birdhouse runs. The timer counts from the latest seeded birdhouse.",
+		section = hunterSection,
+		position = 1
+	)
+	default boolean showBirdhouseRunCountdown()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showImplingScanner",
+		name = "Impling scanner",
+		description = "Highlight selected implings that are loaded in the scene.",
+		section = hunterSection,
+		position = 2
+	)
+	default boolean showImplingScanner()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showImplingPath",
+		name = "Nearest impling path",
+		description = "Draw a visual line to the closest selected impling.",
+		section = hunterSection,
+		position = 3
+	)
+	default boolean showImplingPath()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "showImplingFinderBox",
+		name = "Impling finder box",
+		description = "Show a compact box with the selected implings currently loaded nearby.",
+		section = hunterSection,
+		position = 4
+	)
+	default boolean showImplingFinderBox()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "flashImplingTarget",
+		name = "Impling alert pulse",
+		description = "Pulse the nearest selected impling in red so it is easier to spot.",
+		section = hunterSection,
+		position = 5
+	)
+	default boolean flashImplingTarget()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "rememberImplings",
+		name = "Impling memory",
+		description = "Keep a short last-seen marker after a selected impling leaves the loaded NPC list.",
+		section = hunterSection,
+		position = 6
+	)
+	default boolean rememberImplings()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "implingBaby",
+		name = "Baby impling",
+		description = "Include Baby implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 10
+	)
+	default boolean implingBaby()
+	{
+		return ImplingType.BABY.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingYoung",
+		name = "Young impling",
+		description = "Include Young implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 11
+	)
+	default boolean implingYoung()
+	{
+		return ImplingType.YOUNG.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingGourmet",
+		name = "Gourmet impling",
+		description = "Include Gourmet implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 12
+	)
+	default boolean implingGourmet()
+	{
+		return ImplingType.GOURMET.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingEarth",
+		name = "Earth impling",
+		description = "Include Earth implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 13
+	)
+	default boolean implingEarth()
+	{
+		return ImplingType.EARTH.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingEssence",
+		name = "Essence impling",
+		description = "Include Essence implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 14
+	)
+	default boolean implingEssence()
+	{
+		return ImplingType.ESSENCE.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingEclectic",
+		name = "Eclectic impling",
+		description = "Include Eclectic implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 15
+	)
+	default boolean implingEclectic()
+	{
+		return ImplingType.ECLECTIC.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingNature",
+		name = "Nature impling",
+		description = "Include Nature implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 16
+	)
+	default boolean implingNature()
+	{
+		return ImplingType.NATURE.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingMagpie",
+		name = "Magpie impling",
+		description = "Include Magpie implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 17
+	)
+	default boolean implingMagpie()
+	{
+		return ImplingType.MAGPIE.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingNinja",
+		name = "Ninja impling",
+		description = "Include Ninja implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 18
+	)
+	default boolean implingNinja()
+	{
+		return ImplingType.NINJA.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingDragon",
+		name = "Dragon impling",
+		description = "Include Dragon implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 19
+	)
+	default boolean implingDragon()
+	{
+		return ImplingType.DRAGON.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingLucky",
+		name = "Lucky impling",
+		description = "Include Lucky implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 20
+	)
+	default boolean implingLucky()
+	{
+		return ImplingType.LUCKY.isDefaultEnabled();
+	}
+
+	@ConfigItem(
+		keyName = "implingCrystal",
+		name = "Crystal impling",
+		description = "Include Crystal implings in the Hunter impling scanner.",
+		section = hunterSection,
+		position = 21
+	)
+	default boolean implingCrystal()
+	{
+		return ImplingType.CRYSTAL.isDefaultEnabled();
 	}
 
 	@ConfigItem(
@@ -199,6 +446,18 @@ public interface SkillingToolkitConfig extends Config
 	default ToolkitPriceSource priceSource()
 	{
 		return ToolkitPriceSource.GE_GUIDE;
+	}
+
+	@ConfigItem(
+		keyName = "hideTearsOfGuthixDarkness",
+		name = "Tears brightness fix",
+		description = "Remove the vanilla darkness mask while inside Tears of Guthix.",
+		section = interfaceSection,
+		position = 4
+	)
+	default boolean hideTearsOfGuthixDarkness()
+	{
+		return true;
 	}
 
 	@ConfigItem(
@@ -293,6 +552,30 @@ public interface SkillingToolkitConfig extends Config
 		position = 7
 	)
 	default boolean resetSelectedTracker()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "dontShowUpdateScroll",
+		name = "Don't show updates",
+		description = "Do not show automatic Skilling Toolkit update notes for future versions.",
+		section = updateSection,
+		position = 0
+	)
+	default boolean dontShowUpdateScroll()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "previewUpdateScroll",
+		name = "Preview update scroll",
+		description = "Show the update scroll again for testing.",
+		section = updateSection,
+		position = 1
+	)
+	default boolean previewUpdateScroll()
 	{
 		return false;
 	}
@@ -449,6 +732,28 @@ public interface SkillingToolkitConfig extends Config
 	default String savedSeededBirdhouses()
 	{
 		return "";
+	}
+
+	@ConfigItem(
+		keyName = "savedBirdhouseRunReadyAtMillisV1",
+		name = "",
+		description = "",
+		hidden = true
+	)
+	default String savedBirdhouseRunReadyAtMillis()
+	{
+		return "0";
+	}
+
+	@ConfigItem(
+		keyName = "savedHerbRunReadyAtMillisV1",
+		name = "",
+		description = "",
+		hidden = true
+	)
+	default String savedHerbRunReadyAtMillis()
+	{
+		return "0";
 	}
 
 	@ConfigItem(
