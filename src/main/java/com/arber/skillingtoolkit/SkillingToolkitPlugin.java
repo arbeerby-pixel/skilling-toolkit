@@ -148,6 +148,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final String TOOLKIT_UI_LAST_TOGGLE_TICK_KEY = "lastToggleTick";
 	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
 	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
+	private static final String TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY = "pvmChatTabsDisabled";
 	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
@@ -204,7 +205,8 @@ public class SkillingToolkitPlugin extends Plugin
 		"Farming helpers now include compost, needs-compost, protection checks, Anima timers, and permanent compost marker support.",
 		"Hunter now includes birdhouse stats, seeded birdhouse checks, and a configurable impling finder.",
 		"Herb sack viewer shows checked contents and estimated value on hover.",
-		"Tracker resets now refresh inventory baselines to avoid old bank or deposit movements being counted."
+		"Tracker resets now refresh inventory baselines to avoid old bank or deposit movements being counted.",
+		"Chat-tab displays now respect PvM Toolkit's master off switch and restore native tabs immediately."
 	};
 
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
@@ -3721,7 +3723,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void updateTradeButtonClock()
 	{
-		if (!isToolkitUiReady() || !config.tradeButtonClock())
+		if (!isToolkitUiReady() || isPvmChatTabsSuppressed() || !config.tradeButtonClock())
 		{
 			restoreChatTabOverride(ComponentID.CHATBOX_TAB_TRADE);
 			return;
@@ -3734,7 +3736,7 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void updateChatTabTrackers()
 	{
-		if (!isToolkitUiReady())
+		if (!isToolkitUiReady() || isPvmChatTabsSuppressed())
 		{
 			restoreChatTabTrackerOverrides();
 			return;
@@ -6967,6 +6969,26 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 
 		return ownerTick < currentTick;
+	}
+
+	private boolean isPvmChatTabsSuppressed()
+	{
+		String suppressed = configManager.getConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY);
+		if (!Boolean.parseBoolean(suppressed))
+		{
+			return false;
+		}
+
+		// Do not let a stale flag survive when PvM Toolkit was stopped or disabled.
+		if (!isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
+		{
+			configManager.unsetConfiguration(
+				TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY);
+			return false;
+		}
+
+		return true;
 	}
 
 	private boolean isLoggedIn()
