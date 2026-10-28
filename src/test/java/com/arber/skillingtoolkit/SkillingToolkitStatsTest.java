@@ -1,5 +1,6 @@
 package com.arber.skillingtoolkit;
 
+import java.util.List;
 import net.runelite.api.Skill;
 import org.junit.Test;
 
@@ -20,6 +21,7 @@ public class SkillingToolkitStatsTest
 		stats.addBirdhouseXp(4200L);
 		stats.addFarmingActivity(FarmingActivityType.HERBS, 2L, 1200L, 18L, 24000L, true);
 		stats.addFarmingActivity(FarmingActivityType.HOPS, 8L, 64L, 37L, 29415L, true);
+		stats.addActivity(Skill.HERBLORE, 2440, 14L, 1750L, 33000L, 29000L, 1_800_000L);
 
 		SkillingToolkitStats restored = SkillingToolkitStats.deserialize(stats.serialize(), "2026-06-20");
 
@@ -45,6 +47,13 @@ public class SkillingToolkitStatsTest
 		assertEquals(64L, hopsStats.getSeedCost());
 		assertEquals(37L, hopsStats.getHarvested());
 		assertEquals(29415L, hopsStats.getHarvestValue());
+		List<ProcessedItemStats> herbloreActivity = restored.getActivityStats(Skill.HERBLORE);
+		assertEquals(1, herbloreActivity.size());
+		assertEquals(2440, herbloreActivity.get(0).getItemId());
+		assertEquals(14L, herbloreActivity.get(0).getProcessed());
+		assertEquals(1750L, herbloreActivity.get(0).getXp());
+		assertEquals(33000L, herbloreActivity.get(0).getInputCost());
+		assertEquals(29000L, herbloreActivity.get(0).getOutputValue());
 	}
 
 	@Test
@@ -67,6 +76,7 @@ public class SkillingToolkitStatsTest
 		stats.addXp(Skill.FARMING, 2500L);
 		stats.addAction();
 		stats.addFarmingActivity(FarmingActivityType.HERBS, 1L, 27000L, 8L, 36000L, true);
+		stats.addActivity(Skill.HERBLORE, 2440, 14L, 1750L, 33000L, 29000L, 1_800_000L);
 
 		stats.resetGp();
 
@@ -75,5 +85,6 @@ public class SkillingToolkitStatsTest
 		assertEquals(2500L, stats.getXp());
 		assertEquals(1L, stats.getActions());
 		assertEquals(8L, stats.getFarmingActivityStats(FarmingActivityType.HERBS).getHarvested());
+		assertEquals(1, stats.getActivityStats(Skill.HERBLORE).size());
 	}
 }

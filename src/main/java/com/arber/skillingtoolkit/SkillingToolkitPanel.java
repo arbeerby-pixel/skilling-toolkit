@@ -60,12 +60,20 @@ class SkillingToolkitPanel extends PluginPanel
 	private JLabel statTopSkillValue;
 	private JLabel statActiveSkillsValue;
 	private JLabel statActionsValue;
+	private JLabel statOverviewHerbReadyValue;
+	private JLabel statOverviewBirdhouseReadyValue;
 	private JLabel statBirdhouseRunsValue;
 	private JLabel statBirdhouseXpValue;
 	private JLabel statBirdhouseNestsValue;
 	private JLabel statBirdhouseNestValue;
+	private JLabel statBirdhouseReadyValue;
 	private JLabel statBirdhouseAvgNestsValue;
 	private JLabel statBirdhouseAvgValueValue;
+	private JLabel statImplingsVisibleValue;
+	private JLabel statImplingsRememberedValue;
+	private JLabel statNearestImplingValue;
+	private JPanel activityStatsBody;
+	private Skill activityStatsSkill;
 	private JLabel statusLabel;
 	private SkillingToolkitStatsPeriod selectedPeriod = SkillingToolkitStatsPeriod.DAY;
 
@@ -142,14 +150,29 @@ class SkillingToolkitPanel extends PluginPanel
 			{
 				statActionsValue.setText(formatCount(stats.getActions()));
 			}
+			if (statOverviewHerbReadyValue != null)
+			{
+				setCountdownText(statOverviewHerbReadyValue, plugin.shouldShowHerbRunCountdown(), plugin.getHerbRunReadyAtMillis());
+			}
+			if (statOverviewBirdhouseReadyValue != null)
+			{
+				setCountdownText(statOverviewBirdhouseReadyValue, plugin.shouldShowBirdhouseRunCountdown(), plugin.getBirdhouseRunReadyAtMillis());
+			}
 			if (statBirdhouseRunsValue != null)
 			{
 				statBirdhouseRunsValue.setText(formatCount(stats.getBirdhouseRuns()));
 				statBirdhouseXpValue.setText(formatXp(stats.getBirdhouseXp()));
 				statBirdhouseNestsValue.setText(formatCount(stats.getBirdhouseNests()));
 				statBirdhouseNestValue.setText(formatGp(stats.getBirdhouseNestValue()));
+				setCountdownText(statBirdhouseReadyValue, plugin.shouldShowBirdhouseRunCountdown(), plugin.getBirdhouseRunReadyAtMillis());
 				statBirdhouseAvgNestsValue.setText(formatAverageCount(stats.getBirdhouseNests(), stats.getBirdhouseRuns()));
 				statBirdhouseAvgValueValue.setText(formatAverageGp(stats.getBirdhouseNestValue(), stats.getBirdhouseRuns()));
+			}
+			if (statImplingsVisibleValue != null)
+			{
+				statImplingsVisibleValue.setText(formatCount(plugin.getTrackedImplingCount()));
+				statImplingsRememberedValue.setText(formatCount(plugin.getRememberedImplingCount()));
+				statNearestImplingValue.setText(plugin.getNearestImplingSummary());
 			}
 			for (Map.Entry<FarmingActivityType, FarmingStatsLabels> farmingEntry : farmingStatLabels.entrySet())
 			{
@@ -161,11 +184,19 @@ class SkillingToolkitPanel extends PluginPanel
 				labels.harvested.setText(formatCount(farmingStats.getHarvested()));
 				labels.harvestValue.setText(formatGp(farmingStats.getHarvestValue()));
 				labels.avgHarvested.setText(formatAverageCount(farmingStats.getHarvested(), farmingStats.getRuns()));
+				if (labels.readyIn != null)
+				{
+					setCountdownText(labels.readyIn, plugin.shouldShowHerbRunCountdown(), plugin.getHerbRunReadyAtMillis());
+				}
 				if (labels.profit != null)
 				{
 					labels.profit.setText(formatProfitGp(farmingStats.getProfit()));
 					labels.profit.setForeground(farmingStats.getProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
 				}
+			}
+			if (activityStatsBody != null)
+			{
+				refreshActivityStats(stats, activityStatsSkill);
 			}
 
 			refreshQuickControls();
@@ -242,12 +273,20 @@ class SkillingToolkitPanel extends PluginPanel
 		statTopSkillValue = null;
 		statActiveSkillsValue = null;
 		statActionsValue = null;
+		statOverviewHerbReadyValue = null;
+		statOverviewBirdhouseReadyValue = null;
 		statBirdhouseRunsValue = null;
 		statBirdhouseXpValue = null;
 		statBirdhouseNestsValue = null;
 		statBirdhouseNestValue = null;
+		statBirdhouseReadyValue = null;
 		statBirdhouseAvgNestsValue = null;
 		statBirdhouseAvgValueValue = null;
+		statImplingsVisibleValue = null;
+		statImplingsRememberedValue = null;
+		statNearestImplingValue = null;
+		activityStatsBody = null;
+		activityStatsSkill = null;
 		statusLabel = null;
 	}
 
@@ -283,6 +322,15 @@ class SkillingToolkitPanel extends PluginPanel
 		});
 		content.add(xpCard);
 		content.add(Box.createVerticalStrut(8));
+
+		JPanel runCountdownCard = collapsibleCard("Run countdowns", true, body ->
+		{
+			statOverviewHerbReadyValue = addRow(body, "Herb runs", ACTION_COLOR);
+			statOverviewBirdhouseReadyValue = addRow(body, "Birdhouses", ACTION_COLOR);
+		});
+		content.add(runCountdownCard);
+		content.add(Box.createVerticalStrut(8));
+
 		addQuickControls(content);
 	}
 
@@ -302,16 +350,66 @@ class SkillingToolkitPanel extends PluginPanel
 		content.add(section("Hunter"));
 		addPeriodControls(content);
 
+		JPanel xpCard = collapsibleCard("Hunter XP", true, body ->
+		{
+			statXpValue = addRow(body, "XP", XP_COLOR);
+		});
+		content.add(xpCard);
+		content.add(Box.createVerticalStrut(8));
+
 		JPanel birdhouseCard = collapsibleCard("Birdhouses", true, body ->
 		{
 			statBirdhouseRunsValue = addRow(body, "Runs", ACTION_COLOR);
 			statBirdhouseXpValue = addRow(body, "XP", XP_COLOR);
+			statBirdhouseReadyValue = addRow(body, "Ready in", ACTION_COLOR);
 			statBirdhouseNestsValue = addRow(body, "Nests", XP_COLOR);
 			statBirdhouseNestValue = addRow(body, "Nest value", PROFIT_COLOR);
 			statBirdhouseAvgNestsValue = addRow(body, "Avg nests", XP_COLOR);
 			statBirdhouseAvgValueValue = addRow(body, "Avg value", PROFIT_COLOR);
 		});
 		content.add(birdhouseCard);
+		content.add(Box.createVerticalStrut(8));
+		content.add(activityStatsCard(Skill.HUNTER, "Hunter activity"));
+		content.add(Box.createVerticalStrut(8));
+
+		JPanel implingCard = collapsibleCard("Impling finder", true, body ->
+		{
+			statImplingsVisibleValue = addRow(body, "Loaded", ACTION_COLOR);
+			statImplingsRememberedValue = addRow(body, "Last seen", MUTED_TEXT);
+			statNearestImplingValue = addRow(body, "Nearest", XP_COLOR);
+			addDivider(body);
+
+			JPanel controls = new JPanel(new GridLayout(0, 2, 4, 4));
+			controls.setBackground(CARD_BACKGROUND);
+			controls.setMaximumSize(new Dimension(Integer.MAX_VALUE, 124));
+			addQuickToggle(controls, "Scanner", "<html><b>Scanner</b><br>Highlight selected implings that are currently loaded.</html>", plugin::isImplingScannerQuickEnabled, plugin::setImplingScannerQuickEnabled);
+			addQuickToggle(controls, "Path", "<html><b>Path</b><br>Draw a visual line to the closest selected impling.</html>", plugin::isImplingPathQuickEnabled, plugin::setImplingPathQuickEnabled);
+			addQuickToggle(controls, "Finder box", "<html><b>Finder box</b><br>Show a compact nearby-implings box on screen.</html>", plugin::isImplingFinderBoxQuickEnabled, plugin::setImplingFinderBoxQuickEnabled);
+			addQuickToggle(controls, "Pulse", "<html><b>Pulse</b><br>Pulse the nearest selected impling in red.</html>", plugin::isImplingPulseQuickEnabled, plugin::setImplingPulseQuickEnabled);
+			addQuickToggle(controls, "Memory", "<html><b>Memory</b><br>Keep a short last-seen marker after a selected impling unloads.</html>", plugin::isImplingMemoryQuickEnabled, plugin::setImplingMemoryQuickEnabled);
+			body.add(controls);
+
+			addDivider(body);
+			JPanel implingTypes = new JPanel(new GridLayout(0, 2, 4, 4));
+			implingTypes.setBackground(CARD_BACKGROUND);
+			implingTypes.setMaximumSize(new Dimension(Integer.MAX_VALUE, 220));
+			for (ImplingType type : ImplingType.values())
+			{
+				addQuickToggle(
+					implingTypes,
+					type.getDisplayName(),
+					"<html><b>" + type.getDisplayName() + " impling</b><br>Include this impling in the scanner.</html>",
+					() -> plugin.isImplingTypeQuickEnabled(type),
+					enabled -> plugin.setImplingTypeQuickEnabled(type, enabled));
+			}
+			body.add(implingTypes);
+
+			statusLabel = new JLabel("Scanner uses loaded NPCs; memory is last seen", SwingConstants.CENTER);
+			statusLabel.setForeground(MUTED_TEXT);
+			statusLabel.setBorder(BorderFactory.createEmptyBorder(7, 0, 0, 0));
+			body.add(centeredRow(statusLabel, CARD_BACKGROUND));
+		});
+		content.add(implingCard);
 	}
 
 	private void addSkillPlaceholderPanel(JPanel content, Skill skill)
@@ -320,15 +418,17 @@ class SkillingToolkitPanel extends PluginPanel
 		content.add(section(skillName));
 		addPeriodControls(content);
 
-		JPanel card = collapsibleCard(skillName, true, body ->
+		JPanel xpCard = collapsibleCard(skillName + " XP", true, body ->
 		{
 			statXpValue = addRow(body, "XP", XP_COLOR);
-			JLabel placeholder = new JLabel("Detailed tracker coming later", SwingConstants.CENTER);
-			placeholder.setForeground(MUTED_TEXT);
-			placeholder.setBorder(BorderFactory.createEmptyBorder(5, 0, 1, 0));
-			body.add(centeredRow(placeholder, CARD_BACKGROUND));
 		});
-		content.add(card);
+		content.add(xpCard);
+
+		if (plugin.supportsItemActivityStats(skill))
+		{
+			content.add(Box.createVerticalStrut(8));
+			content.add(activityStatsCard(skill, "Current activity"));
+		}
 	}
 
 	private void addPeriodControls(JPanel content)
@@ -384,10 +484,11 @@ class SkillingToolkitPanel extends PluginPanel
 		{
 			JPanel toggles = new JPanel(new GridLayout(0, 1, 4, 4));
 			toggles.setBackground(CARD_BACKGROUND);
-			toggles.setMaximumSize(new Dimension(Integer.MAX_VALUE, 260));
+			toggles.setMaximumSize(new Dimension(Integer.MAX_VALUE, 300));
 			addQuickToggle(toggles, "Compost", "<html><b>Compost</b><br>Show or hide compost patch markers.</html>", plugin::isCompostQuickEnabled, plugin::setCompostQuickEnabled);
 			addQuickToggle(toggles, "Protection", "<html><b>Protection</b><br>Show or hide gardener payment checks.</html>", plugin::isProtectionQuickEnabled, plugin::setProtectionQuickEnabled);
 			addQuickToggle(toggles, "Timers", "<html><b>Timers</b><br>Show or hide Anima patch timers.</html>", plugin::isPatchTimerQuickEnabled, plugin::setPatchTimerQuickEnabled);
+			addQuickToggle(toggles, "Run timers", "<html><b>Run timers</b><br>Show or hide herb and birdhouse run countdowns in the panel.</html>", plugin::isRunCountdownsQuickEnabled, plugin::setRunCountdownsQuickEnabled);
 			addQuickToggle(toggles, "Birdhouses", "<html><b>Birdhouses</b><br>Show or hide seeded birdhouse checks.</html>", plugin::isBirdhouseQuickEnabled, plugin::setBirdhouseQuickEnabled);
 			addQuickToggle(toggles, "Inventory", "<html><b>Inventory</b><br>Show or hide inventory spaces infobox.</html>", plugin::isInventoryQuickEnabled, plugin::setInventoryQuickEnabled);
 			addQuickToggle(toggles, "Herb sack", "<html><b>Herb sack</b><br>Show or hide herb sack contents on hover.</html>", plugin::isHerbSackViewerQuickEnabled, plugin::setHerbSackViewerQuickEnabled);
@@ -435,10 +536,75 @@ class SkillingToolkitPanel extends PluginPanel
 			JLabel harvested = addRow(body, harvestLabel, XP_COLOR);
 			JLabel harvestValue = addRow(body, valueLabel, PROFIT_COLOR);
 			JLabel profit = showProfit ? addRow(body, "Profit", PROFIT_COLOR) : null;
+			JLabel readyIn = type == FarmingActivityType.HERBS ? addRow(body, "Ready in", ACTION_COLOR) : null;
 			addDivider(body);
 			JLabel avgHarvested = addRow(body, "Avg " + harvestLabel.toLowerCase(Locale.ENGLISH), XP_COLOR);
-			farmingStatLabels.put(type, new FarmingStatsLabels(runs, seeds, seedCost, harvested, harvestValue, profit, avgHarvested));
+			farmingStatLabels.put(type, new FarmingStatsLabels(runs, seeds, seedCost, harvested, harvestValue, profit, readyIn, avgHarvested));
 		});
+	}
+
+	private JPanel activityStatsCard(Skill skill, String title)
+	{
+		return collapsibleCard(title, true, body ->
+		{
+			activityStatsSkill = skill;
+			activityStatsBody = body;
+		});
+	}
+
+	private void refreshActivityStats(SkillingToolkitStats stats, Skill skill)
+	{
+		if (activityStatsBody == null || skill == null)
+		{
+			return;
+		}
+
+		activityStatsBody.removeAll();
+		List<ProcessedItemStats> items = stats.getActivityStats(skill);
+		if (items.isEmpty())
+		{
+			JLabel empty = new JLabel("Process items to start tracking", SwingConstants.CENTER);
+			empty.setForeground(MUTED_TEXT);
+			empty.setBorder(BorderFactory.createEmptyBorder(5, 0, 1, 0));
+			activityStatsBody.add(centeredRow(empty, CARD_BACKGROUND));
+			activityStatsBody.revalidate();
+			activityStatsBody.repaint();
+			return;
+		}
+
+		ProcessedItemStats current = items.get(0);
+		JLabel item = addRow(activityStatsBody, "Item", XP_COLOR);
+		item.setText(formatActivityItemName(current.getItemId(), 22));
+		JLabel processed = addRow(activityStatsBody, "Processed", XP_COLOR);
+		processed.setText(formatCount(current.getProcessed()));
+		JLabel xp = addRow(activityStatsBody, "XP", XP_COLOR);
+		xp.setText(formatXp(current.getXp()));
+		JLabel xpHour = addRow(activityStatsBody, "XP/hr", XP_COLOR);
+		xpHour.setText(formatXpPerHour(current));
+		JLabel output = addRow(activityStatsBody, "Output", PROFIT_COLOR);
+		output.setText(formatGp(current.getOutputValue()));
+		JLabel cost = addRow(activityStatsBody, "Cost", COST_COLOR);
+		cost.setText(formatGp(current.getInputCost()));
+		JLabel profit = addRow(activityStatsBody, "Profit", current.getProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
+		profit.setText(formatProfitGp(current.getProfit()));
+		JLabel gpPerXp = addRow(activityStatsBody, "GP/XP", current.getProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
+		gpPerXp.setText(formatGpPerXp(current));
+
+		addDivider(activityStatsBody);
+		JLabel recent = new JLabel("Recent items", SwingConstants.CENTER);
+		recent.setForeground(MUTED_TEXT);
+		recent.setBorder(BorderFactory.createEmptyBorder(0, 0, 2, 0));
+		activityStatsBody.add(centeredRow(recent, CARD_BACKGROUND));
+		int limit = Math.min(4, items.size());
+		for (int index = 0; index < limit; index++)
+		{
+			ProcessedItemStats recentItem = items.get(index);
+			JLabel recentValue = addRow(activityStatsBody, formatActivityItemName(recentItem.getItemId(), 18), recentItem.getProfit() >= 0 ? PROFIT_COLOR : COST_COLOR);
+			recentValue.setText(formatActivitySummary(recentItem));
+		}
+
+		activityStatsBody.revalidate();
+		activityStatsBody.repaint();
 	}
 
 	private JButton secondaryButton(String text)
@@ -694,6 +860,103 @@ class SkillingToolkitPanel extends PluginPanel
 		return formatGp(Math.round((double) total / runs));
 	}
 
+	private String formatActivityItemName(int itemId, int maxLength)
+	{
+		return shorten(plugin.getStatsItemName(itemId), maxLength);
+	}
+
+	private String formatActivitySummary(ProcessedItemStats item)
+	{
+		return formatCount(item.getProcessed()) + " | " + formatXp(item.getXp());
+	}
+
+	private String formatXpPerHour(ProcessedItemStats item)
+	{
+		long durationMillis = item.getDurationMillis();
+		if (durationMillis < 10_000L || item.getXp() <= 0)
+		{
+			return "-";
+		}
+
+		long xpPerHour = Math.round((double) item.getXp() * 3_600_000D / durationMillis);
+		return QuantityFormatter.quantityToStackSize(xpPerHour).toLowerCase(Locale.ENGLISH) + " xp/h";
+	}
+
+	private void setCountdownText(JLabel label, boolean enabled, long readyAtMillis)
+	{
+		if (label == null)
+		{
+			return;
+		}
+
+		if (!enabled)
+		{
+			label.setText("Off");
+			label.setForeground(MUTED_TEXT);
+			return;
+		}
+
+		long remainingMillis = readyAtMillis - System.currentTimeMillis();
+		boolean ready = readyAtMillis > 0L && remainingMillis <= 0L;
+		label.setText(formatCountdown(readyAtMillis));
+		label.setForeground(ready ? PROFIT_COLOR : ACTION_COLOR);
+	}
+
+	private String formatCountdown(long readyAtMillis)
+	{
+		if (readyAtMillis <= 0L)
+		{
+			return "-";
+		}
+
+		long remainingMillis = readyAtMillis - System.currentTimeMillis();
+		if (remainingMillis <= 0L)
+		{
+			return "Ready";
+		}
+
+		long totalMinutes = (remainingMillis + 59_999L) / 60_000L;
+		long hours = totalMinutes / 60L;
+		long minutes = totalMinutes % 60L;
+		if (hours > 0L)
+		{
+			return hours + "h " + minutes + "m";
+		}
+
+		return minutes + "m";
+	}
+
+	private String formatGpPerXp(ProcessedItemStats item)
+	{
+		if (item.getXp() <= 0)
+		{
+			return "-";
+		}
+
+		double gpPerXp = (double) item.getProfit() / item.getXp();
+		String prefix = gpPerXp > 0D ? "+" : "";
+		double absolute = Math.abs(gpPerXp);
+		String number = absolute >= 100D
+			? String.format(Locale.ENGLISH, "%.0f", gpPerXp)
+			: String.format(Locale.ENGLISH, "%.1f", gpPerXp);
+		return prefix + number + " gp/xp";
+	}
+
+	private static String shorten(String value, int maxLength)
+	{
+		if (value == null || value.length() <= maxLength)
+		{
+			return value == null ? "" : value;
+		}
+
+		if (maxLength <= 1)
+		{
+			return value.substring(0, Math.max(0, maxLength));
+		}
+
+		return value.substring(0, maxLength - 1) + ".";
+	}
+
 	private static PanelSelection[] createPanelSelections()
 	{
 		List<PanelSelection> selections = new ArrayList<>();
@@ -760,6 +1023,7 @@ class SkillingToolkitPanel extends PluginPanel
 		private final JLabel harvested;
 		private final JLabel harvestValue;
 		private final JLabel profit;
+		private final JLabel readyIn;
 		private final JLabel avgHarvested;
 
 		private FarmingStatsLabels(
@@ -769,6 +1033,7 @@ class SkillingToolkitPanel extends PluginPanel
 			JLabel harvested,
 			JLabel harvestValue,
 			JLabel profit,
+			JLabel readyIn,
 			JLabel avgHarvested)
 		{
 			this.runs = runs;
@@ -777,6 +1042,7 @@ class SkillingToolkitPanel extends PluginPanel
 			this.harvested = harvested;
 			this.harvestValue = harvestValue;
 			this.profit = profit;
+			this.readyIn = readyIn;
 			this.avgHarvested = avgHarvested;
 		}
 	}

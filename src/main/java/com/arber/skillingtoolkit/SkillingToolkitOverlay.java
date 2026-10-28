@@ -7,9 +7,12 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.Stroke;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
+import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.inject.Inject;
@@ -17,6 +20,7 @@ import net.runelite.api.Client;
 import net.runelite.api.ItemID;
 import net.runelite.api.Perspective;
 import net.runelite.api.Point;
+import net.runelite.api.Player;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
@@ -44,6 +48,22 @@ class SkillingToolkitOverlay extends Overlay
 	private static final Color PATCH_TIMER_COLOR = new Color(255, 220, 80);
 	private static final Color PATCH_TIMER_BACKGROUND = new Color(24, 20, 15, 180);
 	private static final Color PATCH_TIMER_BORDER = new Color(255, 220, 80, 140);
+	private static final Color IMPLING_ALERT_COLOR = new Color(255, 55, 55);
+	private static final Color IMPLING_PATH_COLOR = new Color(255, 200, 65, 210);
+	private static final Color IMPLING_PATH_SHADOW = new Color(0, 0, 0, 190);
+	private static final Color IMPLING_LAST_SEEN_TEXT = new Color(210, 210, 210, 180);
+	private static final Color IMPLING_LAST_SEEN_FILL = new Color(255, 200, 65, 35);
+	private static final Color IMPLING_LAST_SEEN_OUTLINE = new Color(255, 200, 65, 130);
+	private static final Color IMPLING_BOX_BACKGROUND = new Color(18, 18, 18, 205);
+	private static final Color IMPLING_BOX_BORDER = new Color(190, 135, 35, 220);
+	private static final Color IMPLING_BOX_TITLE = new Color(255, 170, 0);
+	private static final Color IMPLING_BOX_TEXT = new Color(240, 235, 220);
+	private static final int IMPLING_BOX_X = 8;
+	private static final int IMPLING_BOX_Y = 44;
+	private static final int IMPLING_BOX_PADDING = 7;
+	private static final int IMPLING_BOX_ROW_HEIGHT = 15;
+	private static final int IMPLING_BOX_SWATCH_SIZE = 8;
+	private static final long IMPLING_PULSE_MILLIS = 450L;
 
 	private final Client client;
 	private final SkillingToolkitConfig config;
@@ -70,7 +90,8 @@ class SkillingToolkitOverlay extends Overlay
 		if (!config.showCompostIndicator()
 			&& !config.showCropProtectionIndicator()
 			&& !config.showBirdhouseSeedIndicator()
-			&& !config.showPatchTimers())
+			&& !config.showPatchTimers()
+			&& !config.showImplingScanner())
 		{
 			return null;
 		}
@@ -123,6 +144,11 @@ class SkillingToolkitOverlay extends Overlay
 			{
 				renderBirdhouseSeeded(graphics, birdhousePoint);
 			}
+		}
+
+		if (config.showImplingScanner())
+		{
+			renderImplingScanner(graphics);
 		}
 
 		return null;
@@ -274,6 +300,237 @@ class SkillingToolkitOverlay extends Overlay
 		{
 			OverlayUtil.renderImageLocation(graphics, iconLocation, icon);
 		}
+	}
+
+	private void renderImplingScanner(Graphics2D graphics)
+	{
+		List<TrackedImpling> implings = plugin.getTrackedImplings();
+		if (implings.isEmpty())
+		{
+			return;
+		}
+
+		TrackedImpling nearest = getNearestImpling(implings);
+		if (config.showImplingPath() && nearest != null)
+		{
+			renderImplingPath(graphics, nearest);
+		}
+
+		for (TrackedImpling impling : implings)
+		{
+			renderImplingMinimap(graphics, impling);
+			renderImpling(graphics, impling);
+		}
+
+		if (config.showImplingFinderBox())
+		{
+			renderImplingFinderBox(graphics, implings);
+		}
+	}
+
+	private TrackedImpling getNearestImpling(List<TrackedImpling> implings)
+	{
+		for (TrackedImpling impling : implings)
+		{
+			if (impling.isNearest())
+			{
+				return impling;
+			}
+		}
+
+		return null;
+	}
+
+	private void renderImpling(Graphics2D graphics, TrackedImpling impling)
+	{
+		if (!impling.isLive())
+		{
+			renderLastSeenImpling(graphics, impling);
+			return;
+		}
+
+		Color color = impling.getType().getColor();
+		if (impling.isNearest() && config.flashImplingTarget() && isImplingPulseVisible())
+		{
+			color = IMPLING_ALERT_COLOR;
+		}
+
+		String label = impling.getType().getDisplayName();
+		if (impling.isNearest())
+		{
+			label += " " + impling.getDistance();
+		}
+
+		OverlayUtil.renderActorOverlay(graphics, impling.getNpc(), label, color);
+	}
+
+	private void renderLastSeenImpling(Graphics2D graphics, TrackedImpling impling)
+	{
+		LocalPoint localPoint = LocalPoint.fromWorld(client, impling.getWorldPoint());
+		if (localPoint == null)
+		{
+			return;
+		}
+
+		java.awt.Polygon tilePoly = Perspective.getCanvasTilePoly(client, localPoint);
+		if (tilePoly != null)
+		{
+			OverlayUtil.renderPolygon(graphics, tilePoly, IMPLING_LAST_SEEN_OUTLINE, IMPLING_LAST_SEEN_FILL, new BasicStroke(1));
+		}
+
+		String label = impling.getType().getDisplayName() + " last";
+		Point textLocation = Perspective.getCanvasTextLocation(client, graphics, localPoint, label, 0);
+		if (textLocation != null)
+		{
+			OverlayUtil.renderTextLocation(graphics, textLocation, label, IMPLING_LAST_SEEN_TEXT);
+		}
+	}
+
+	private void renderImplingMinimap(Graphics2D graphics, TrackedImpling impling)
+	{
+		Point minimapLocation = null;
+		if (impling.isLive() && impling.getNpc() != null)
+		{
+			minimapLocation = impling.getNpc().getMinimapLocation();
+		}
+		else
+		{
+			LocalPoint localPoint = LocalPoint.fromWorld(client, impling.getWorldPoint());
+			if (localPoint != null)
+			{
+				minimapLocation = Perspective.localToMinimap(client, localPoint);
+			}
+		}
+
+		if (minimapLocation == null)
+		{
+			return;
+		}
+
+		Color color = impling.isLive() ? impling.getType().getColor() : IMPLING_LAST_SEEN_OUTLINE;
+		if (impling.isNearest() && impling.isLive() && config.flashImplingTarget() && isImplingPulseVisible())
+		{
+			color = IMPLING_ALERT_COLOR;
+		}
+
+		OverlayUtil.renderMinimapLocation(graphics, minimapLocation, color);
+	}
+
+	private void renderImplingPath(Graphics2D graphics, TrackedImpling impling)
+	{
+		Player player = client.getLocalPlayer();
+		if (player == null)
+		{
+			return;
+		}
+
+		LocalPoint playerPoint = player.getLocalLocation();
+		LocalPoint implingPoint = impling.isLive() && impling.getNpc() != null
+			? impling.getNpc().getLocalLocation()
+			: LocalPoint.fromWorld(client, impling.getWorldPoint());
+		if (playerPoint == null || implingPoint == null)
+		{
+			return;
+		}
+
+		Point from = Perspective.localToCanvas(client, playerPoint, client.getPlane());
+		Point to = Perspective.localToCanvas(client, implingPoint, impling.getWorldPoint().getPlane());
+		if (from == null || to == null)
+		{
+			return;
+		}
+
+		Stroke previousStroke = graphics.getStroke();
+		graphics.setStroke(new BasicStroke(5, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		graphics.setColor(IMPLING_PATH_SHADOW);
+		graphics.drawLine(from.getX(), from.getY(), to.getX(), to.getY());
+		graphics.setStroke(new BasicStroke(2, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		graphics.setColor(IMPLING_PATH_COLOR);
+		graphics.drawLine(from.getX(), from.getY(), to.getX(), to.getY());
+		graphics.fillOval(to.getX() - 4, to.getY() - 4, 8, 8);
+		graphics.setStroke(previousStroke);
+	}
+
+	private void renderImplingFinderBox(Graphics2D graphics, List<TrackedImpling> implings)
+	{
+		Map<ImplingType, int[]> rows = new EnumMap<>(ImplingType.class);
+		for (TrackedImpling impling : implings)
+		{
+			int[] values = rows.computeIfAbsent(impling.getType(), ignored -> new int[] {0, 0, Integer.MAX_VALUE});
+			if (impling.isLive())
+			{
+				values[0]++;
+			}
+			else
+			{
+				values[1]++;
+			}
+			values[2] = Math.min(values[2], impling.getDistance());
+		}
+
+		Font previousFont = graphics.getFont();
+		graphics.setFont(FontManager.getRunescapeFont());
+		FontMetrics metrics = graphics.getFontMetrics();
+		int titleWidth = metrics.stringWidth("Implings nearby");
+		int width = titleWidth + IMPLING_BOX_PADDING * 2;
+		for (Map.Entry<ImplingType, int[]> entry : rows.entrySet())
+		{
+			String rowText = formatImplingBoxRow(entry.getKey(), entry.getValue());
+			width = Math.max(width, metrics.stringWidth(rowText) + IMPLING_BOX_PADDING * 2 + IMPLING_BOX_SWATCH_SIZE + 5);
+		}
+
+		int height = IMPLING_BOX_PADDING * 2 + metrics.getAscent() + 4 + rows.size() * IMPLING_BOX_ROW_HEIGHT;
+		graphics.setColor(IMPLING_BOX_BACKGROUND);
+		graphics.fillRoundRect(IMPLING_BOX_X, IMPLING_BOX_Y, width, height, 6, 6);
+		graphics.setColor(IMPLING_BOX_BORDER);
+		graphics.drawRoundRect(IMPLING_BOX_X, IMPLING_BOX_Y, width, height, 6, 6);
+
+		int textX = IMPLING_BOX_X + IMPLING_BOX_PADDING;
+		int textY = IMPLING_BOX_Y + IMPLING_BOX_PADDING + metrics.getAscent();
+		drawShadowedText(graphics, "Implings nearby", textX, textY, IMPLING_BOX_TITLE);
+		textY += IMPLING_BOX_ROW_HEIGHT + 2;
+
+		for (Map.Entry<ImplingType, int[]> entry : rows.entrySet())
+		{
+			ImplingType type = entry.getKey();
+			graphics.setColor(type.getColor());
+			graphics.fillRect(textX, textY - metrics.getAscent() + 3, IMPLING_BOX_SWATCH_SIZE, IMPLING_BOX_SWATCH_SIZE);
+			drawShadowedText(
+				graphics,
+				formatImplingBoxRow(type, entry.getValue()),
+				textX + IMPLING_BOX_SWATCH_SIZE + 5,
+				textY,
+				IMPLING_BOX_TEXT);
+			textY += IMPLING_BOX_ROW_HEIGHT;
+		}
+
+		graphics.setFont(previousFont);
+	}
+
+	private String formatImplingBoxRow(ImplingType type, int[] values)
+	{
+		String state = values[0] > 0
+			? values[0] + " live"
+			: values[1] + " seen";
+		if (values[0] > 0 && values[1] > 0)
+		{
+			state += " +" + values[1];
+		}
+
+		return type.getDisplayName() + " " + state + " - " + values[2] + "t";
+	}
+
+	private void drawShadowedText(Graphics2D graphics, String text, int x, int y, Color color)
+	{
+		graphics.setColor(Color.BLACK);
+		graphics.drawString(text, x + 1, y + 1);
+		graphics.setColor(color);
+		graphics.drawString(text, x, y);
+	}
+
+	private boolean isImplingPulseVisible()
+	{
+		return (System.currentTimeMillis() / IMPLING_PULSE_MILLIS) % 2L == 0L;
 	}
 
 	private BufferedImage getCompostIcon()
