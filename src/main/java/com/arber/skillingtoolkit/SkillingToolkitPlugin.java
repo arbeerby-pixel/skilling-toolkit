@@ -149,6 +149,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final String TOOLKIT_UI_SESSION_KEY = "activeSession";
 	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
 	private static final String TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY = "pvmChatTabsDisabled";
+	private static final String TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY = "skillingChatTabsDisabled";
 	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
@@ -206,7 +207,8 @@ public class SkillingToolkitPlugin extends Plugin
 		"Hunter now includes birdhouse stats, seeded birdhouse checks, and a configurable impling finder.",
 		"Herb sack viewer shows checked contents and estimated value on hover.",
 		"Tracker resets now refresh inventory baselines to avoid old bank or deposit movements being counted.",
-		"Chat-tab displays now respect PvM Toolkit's master off switch and restore native tabs immediately."
+		"Chat-tab displays now respect PvM Toolkit's master off switch and restore native tabs immediately.",
+		"PvM and Skilling chat-tab ownership no longer conflicts when both toolkits are active."
 	};
 
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
@@ -903,6 +905,7 @@ public class SkillingToolkitPlugin extends Plugin
 	protected void startUp()
 	{
 		started = true;
+		setSharedSkillingChatTabSuppression(false);
 		toolkitUiGeneration++;
 		overlayManager.add(overlay);
 		overlayManager.add(herbSackOverlay);
@@ -942,6 +945,7 @@ public class SkillingToolkitPlugin extends Plugin
 	protected void shutDown()
 	{
 		started = false;
+		setSharedSkillingChatTabSuppression(true);
 		overlayManager.remove(overlay);
 		overlayManager.remove(herbSackOverlay);
 		removeToolkitNavigation();
@@ -4253,6 +4257,9 @@ public class SkillingToolkitPlugin extends Plugin
 			{
 				return;
 			}
+			// Keep the disabled status published while Skilling is stopped. PvM
+			// must restore native tabs instead of taking over these widgets.
+			setSharedSkillingChatTabSuppression(true);
 
 			restoreChatTabOverrides();
 			removeInventoryInfoBox();
@@ -6973,22 +6980,22 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private boolean isPvmChatTabsSuppressed()
 	{
-		String suppressed = configManager.getConfiguration(
-			TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY);
-		if (!Boolean.parseBoolean(suppressed))
-		{
-			return false;
-		}
+		return shouldSuppressSharedChatTabs(
+			configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY),
+			configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY));
+	}
 
-		// Do not let a stale flag survive when PvM Toolkit was stopped or disabled.
-		if (!isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
-		{
-			configManager.unsetConfiguration(
-				TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY);
-			return false;
-		}
+	static boolean shouldSuppressSharedChatTabs(String pvmDisabled, String skillingDisabled)
+	{
+		return Boolean.parseBoolean(pvmDisabled) || Boolean.parseBoolean(skillingDisabled);
+	}
 
-		return true;
+	private void setSharedSkillingChatTabSuppression(boolean suppressed)
+	{
+		configManager.setConfiguration(
+			TOOLKIT_UI_COORDINATION_GROUP,
+			TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY,
+			suppressed);
 	}
 
 	private boolean isLoggedIn()
