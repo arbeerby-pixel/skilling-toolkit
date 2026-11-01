@@ -44,9 +44,9 @@ final class SkillingToolkitUpdatePanel extends Overlay implements MouseListener
 	private static final int MIN_WIDTH = 460;
 	private static final int MAX_WIDTH = 820;
 	private static final int MIN_HEIGHT = 320;
-	private static final int MAX_HEIGHT = 440;
+	private static final int MAX_HEIGHT = 560;
 	private static final double CANVAS_WIDTH_RATIO = 0.64d;
-	private static final double CANVAS_HEIGHT_RATIO = 0.55d;
+	private static final double CANVAS_HEIGHT_RATIO = 0.82d;
 	private static final int EDGE_GAP = 24;
 	private static final int ROLL_HEIGHT = 34;
 	private static final int ROLL_OVERHANG = 32;
