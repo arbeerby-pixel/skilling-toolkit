@@ -150,6 +150,16 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final String TOOLKIT_UI_OWNER_SOURCE_KEY = "ownerSource";
 	private static final String TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY = "pvmChatTabsDisabled";
 	private static final String TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY = "skillingChatTabsDisabled";
+	private static final String PVM_TOOLS_CONFIG_GROUP = "pvmTools";
+	private static final String PVM_CHAT_TABS_ENABLED_KEY = "chatTabOverridesEnabled";
+	private static final String[] PVM_CHAT_TAB_DISPLAY_KEYS = {
+		"clanChatTabDisplay",
+		"channelChatTabDisplay",
+		"privateChatTabDisplay",
+		"publicChatTabDisplay",
+		"gameChatTabDisplay",
+		"tradeChatTabDisplay"
+	};
 	private static final String TOOLKIT_UI_SESSION_PROPERTY = "arber.toolkit.ui.session";
 	private static final String TOOLKIT_UI_OWNER_SKILLING = "SKILLING";
 	private static final String TOOLKIT_UI_OWNER_PVM = "PVM";
@@ -208,7 +218,7 @@ public class SkillingToolkitPlugin extends Plugin
 		"Herb sack viewer shows checked contents and estimated value on hover.",
 		"Tracker resets now refresh inventory baselines to avoid old bank or deposit movements being counted.",
 		"Chat-tab displays now respect PvM Toolkit's master off switch and restore native tabs immediately.",
-		"PvM and Skilling chat-tab ownership no longer conflicts when both toolkits are active."
+		"Explicit PvM chat-tab choices now stay stable while Skilling activity continues tracking in the background."
 	};
 
 	private static final int[] CHAT_TAB_TRACKER_SLOT_COMPONENTS = {
@@ -6817,10 +6827,58 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private void markSkillingActivity()
 	{
+		// PvM has a single shared chat-tab surface. An explicit PvM selection is
+		// authoritative, so skilling activity must not steal ownership on every
+		// XP/inventory event and make the tabs flicker between both toolkits.
+		if (hasEnabledPvmChatTabSelection())
+		{
+			return;
+		}
+
 		if (!ownsToolkitUi() && !isToolkitUiManuallySelected())
 		{
 			setToolkitUiOwner(TOOLKIT_UI_OWNER_SKILLING, TOOLKIT_UI_SOURCE_ACTIVITY);
 		}
+	}
+
+	private boolean hasEnabledPvmChatTabSelection()
+	{
+		if (!isToolkitPluginEnabled(PVM_PLUGIN_CLASS_NAMES))
+		{
+			return false;
+		}
+
+		String enabled = configManager.getConfiguration(PVM_TOOLS_CONFIG_GROUP, PVM_CHAT_TABS_ENABLED_KEY);
+		if ("false".equalsIgnoreCase(enabled))
+		{
+			return false;
+		}
+
+		String[] displays = new String[PVM_CHAT_TAB_DISPLAY_KEYS.length];
+		for (int i = 0; i < PVM_CHAT_TAB_DISPLAY_KEYS.length; i++)
+		{
+			displays[i] = configManager.getConfiguration(PVM_TOOLS_CONFIG_GROUP, PVM_CHAT_TAB_DISPLAY_KEYS[i]);
+		}
+		return hasExplicitPvmChatTabSelection(displays);
+	}
+
+	static boolean hasExplicitPvmChatTabSelection(String... displays)
+	{
+		if (displays == null)
+		{
+			return false;
+		}
+
+		for (String display : displays)
+		{
+			if (display != null
+				&& !"AUTOMATIC".equalsIgnoreCase(display.trim())
+				&& !"VANILLA".equalsIgnoreCase(display.trim()))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private boolean handleToolkitTabToggle(MenuOptionClicked event)
@@ -6980,14 +7038,15 @@ public class SkillingToolkitPlugin extends Plugin
 
 	private boolean isPvmChatTabsSuppressed()
 	{
-		return shouldSuppressSharedChatTabs(
-			configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_PVM_CHAT_TABS_DISABLED_KEY),
-			configManager.getConfiguration(TOOLKIT_UI_COORDINATION_GROUP, TOOLKIT_UI_SKILLING_CHAT_TABS_DISABLED_KEY));
+		// Ownership already serializes writes to the shared widgets. A disabled
+		// flag can outlive a stopped PvM instance, so treating it as a global
+		// suppression leaves Skilling's tabs permanently blank after PvM exits.
+		return false;
 	}
 
 	static boolean shouldSuppressSharedChatTabs(String pvmDisabled, String skillingDisabled)
 	{
-		return Boolean.parseBoolean(pvmDisabled) || Boolean.parseBoolean(skillingDisabled);
+		return Boolean.parseBoolean(pvmDisabled);
 	}
 
 	private void setSharedSkillingChatTabSuppression(boolean suppressed)

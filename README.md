@@ -30,7 +30,7 @@ https://discord.gg/utYem4XhQS
 ### Trackers and interface
 
 - Dynamic chat-tab trackers show XP, top skill, profit, cost, and actions in the order they become active.
-- When PvM Toolkit is also enabled, the `All` chat tab switches manually between skilling and PvM trackers while activity can still switch them automatically.
+- When PvM Toolkit is also enabled, explicit PvM chat-tab choices stay stable; the `All` chat tab can still switch manually between toolkit views.
 - The Trade tab remains a local 24-hour clock.
 - The inventory infobox shows free slots and inventory value.
 - The herb sack viewer shows the last checked sack contents and estimated value when hovering the sack.
