@@ -170,6 +170,16 @@ public class InventoryTransformationTest
 	}
 
 	@Test
+	public void motherlodeWithdrawalUsesOnlyThePositiveInventoryDelta()
+	{
+		Map<Integer, Long> before = quantities(ItemID.COAL, 40L, ItemID.GOLD_ORE, 3L);
+		Map<Integer, Long> after = quantities(ItemID.COAL, 75L, ItemID.GOLD_ORE, 3L, ItemID.MITHRIL_ORE, 2L);
+
+		assertEquals(quantities(ItemID.COAL, 35L, ItemID.MITHRIL_ORE, 2L),
+			SkillingToolkitPlugin.positiveQuantityDifference(before, after));
+	}
+
+	@Test
 	public void permanentCompostMarkersDisableAutoClear()
 	{
 		assertTrue(SkillingToolkitPlugin.shouldAutoClearCompostMarkers(true, false));
