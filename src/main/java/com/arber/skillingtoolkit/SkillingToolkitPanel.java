@@ -74,6 +74,7 @@ class SkillingToolkitPanel extends PluginPanel
 	private JLabel statNearestImplingValue;
 	private JPanel activityStatsBody;
 	private Skill activityStatsSkill;
+	private JPanel miningLootBody;
 	private JLabel statusLabel;
 	private SkillingToolkitStatsPeriod selectedPeriod = SkillingToolkitStatsPeriod.DAY;
 
@@ -198,6 +199,10 @@ class SkillingToolkitPanel extends PluginPanel
 			{
 				refreshActivityStats(stats, activityStatsSkill);
 			}
+			if (miningLootBody != null)
+			{
+				refreshMiningLoot(stats);
+			}
 
 			refreshQuickControls();
 		});
@@ -252,6 +257,10 @@ class SkillingToolkitPanel extends PluginPanel
 		{
 			addHunterPanel(dynamicContent);
 		}
+		else if (selectedPanel.skill == Skill.MINING)
+		{
+			addMiningPanel(dynamicContent);
+		}
 		else
 		{
 			addSkillPlaceholderPanel(dynamicContent, selectedPanel.skill);
@@ -287,6 +296,7 @@ class SkillingToolkitPanel extends PluginPanel
 		statNearestImplingValue = null;
 		activityStatsBody = null;
 		activityStatsSkill = null;
+		miningLootBody = null;
 		statusLabel = null;
 	}
 
@@ -429,6 +439,22 @@ class SkillingToolkitPanel extends PluginPanel
 			content.add(Box.createVerticalStrut(8));
 			content.add(activityStatsCard(skill, "Current activity"));
 		}
+	}
+
+	private void addMiningPanel(JPanel content)
+	{
+		content.add(section("Mining"));
+		addPeriodControls(content);
+
+		JPanel xpCard = collapsibleCard("Mining XP", true, body ->
+		{
+			statXpValue = addRow(body, "XP", XP_COLOR);
+		});
+		content.add(xpCard);
+		content.add(Box.createVerticalStrut(8));
+
+		JPanel lootCard = collapsibleCard("Mining loot", true, body -> miningLootBody = body);
+		content.add(lootCard);
 	}
 
 	private void addPeriodControls(JPanel content)
@@ -605,6 +631,71 @@ class SkillingToolkitPanel extends PluginPanel
 
 		activityStatsBody.revalidate();
 		activityStatsBody.repaint();
+	}
+
+	private void refreshMiningLoot(SkillingToolkitStats stats)
+	{
+		if (miningLootBody == null)
+		{
+			return;
+		}
+
+		miningLootBody.removeAll();
+		List<ProcessedItemStats> items = stats.getActivityStats(Skill.MINING);
+		long totalValue = 0L;
+		for (ProcessedItemStats item : items)
+		{
+			totalValue += item.getOutputValue();
+		}
+
+		JLabel total = addRow(miningLootBody, "Total value", PROFIT_COLOR);
+		total.setText(formatGp(totalValue));
+		addDivider(miningLootBody);
+
+		if (items.isEmpty())
+		{
+			JLabel empty = new JLabel("Mine ores or collect Motherlode rewards", SwingConstants.CENTER);
+			empty.setForeground(MUTED_TEXT);
+			empty.setBorder(BorderFactory.createEmptyBorder(5, 0, 1, 0));
+			miningLootBody.add(centeredRow(empty, CARD_BACKGROUND));
+		}
+		else
+		{
+			JPanel grid = new JPanel(new GridLayout(0, 2, 4, 4));
+			grid.setBackground(CARD_BACKGROUND);
+			for (ProcessedItemStats item : items)
+			{
+				grid.add(miningLootTile(item));
+			}
+			miningLootBody.add(grid);
+		}
+
+		miningLootBody.revalidate();
+		miningLootBody.repaint();
+	}
+
+	private JPanel miningLootTile(ProcessedItemStats item)
+	{
+		JPanel tile = new JPanel(new BorderLayout(4, 0));
+		tile.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		tile.setBorder(BorderFactory.createEmptyBorder(3, 3, 3, 3));
+
+		JLabel icon = new JLabel();
+		plugin.addStatsItemImage(icon, item.getItemId(), item.getProcessed());
+		tile.add(icon, BorderLayout.WEST);
+
+		JPanel details = new JPanel();
+		details.setLayout(new BoxLayout(details, BoxLayout.Y_AXIS));
+		details.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		JLabel name = new JLabel(shorten(plugin.getStatsItemName(item.getItemId()), 16));
+		name.setForeground(ColorScheme.TEXT_COLOR);
+		JLabel quantity = new JLabel(formatCount(item.getProcessed()) + " | " + formatGp(item.getOutputValue()));
+		quantity.setForeground(PROFIT_COLOR);
+		details.add(name);
+		details.add(quantity);
+		tile.add(details, BorderLayout.CENTER);
+		tile.setToolTipText(plugin.getStatsItemName(item.getItemId()) + ": " + formatCount(item.getProcessed()) + " (" + formatGp(item.getOutputValue()) + ")");
+		return tile;
 	}
 
 	private JButton secondaryButton(String text)

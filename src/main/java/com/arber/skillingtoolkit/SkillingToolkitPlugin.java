@@ -60,6 +60,7 @@ import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.PostClientTick;
 import net.runelite.api.events.StatChanged;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.ComponentID;
@@ -86,8 +87,8 @@ import net.runelite.client.util.Text;
 @PluginDescriptor(
 	name = "Skilling Toolkit",
 	configName = SkillingToolkitConfig.GROUP,
-	description = "Adds Farming and Hunter helpers, skilling trackers, inventory helpers, and a Trade-tab clock.",
-	tags = {"skilling", "farming", "compost", "protection", "birdhouse", "hunter", "impling", "herb", "sack", "tracker", "xp", "profit", "cost", "clock", "inventory"}
+	description = "Adds Farming, Hunter, and Mining helpers, Motherlode Mine loot tracking, skilling trackers, inventory helpers, and a Trade-tab clock.",
+	tags = {"skilling", "farming", "mining", "motherlode", "ores", "loot", "compost", "protection", "birdhouse", "hunter", "impling", "herb", "sack", "tracker", "xp", "profit", "cost", "clock", "inventory"}
 )
 public class SkillingToolkitPlugin extends Plugin
 {
@@ -210,8 +211,21 @@ public class SkillingToolkitPlugin extends Plugin
 	private static final int TEARS_OF_GUTHIX_MIN_Y = 9479;
 	private static final int TEARS_OF_GUTHIX_MAX_Y = 9535;
 	private static final int HERB_SACK_CHECK_TIMEOUT_TICKS = 4;
+	private static final Set<Integer> MOTHERLODE_MAP_REGIONS = immutableItemSet(
+		14679, 14680, 14681, 14935, 14936, 14937, 15191, 15192, 15193);
+	private static final Set<Integer> MOTHERLODE_LOOT_ITEMS = immutableItemSet(
+		ItemID.COAL,
+		ItemID.GOLD_ORE,
+		ItemID.MITHRIL_ORE,
+		ItemID.ADAMANTITE_ORE,
+		ItemID.RUNITE_ORE,
+		ItemID.GOLDEN_NUGGET,
+		ItemID.UNCUT_SAPPHIRE,
+		ItemID.UNCUT_EMERALD,
+		ItemID.UNCUT_RUBY,
+		ItemID.UNCUT_DIAMOND);
 	private static final String[] UPDATE_SCROLL_NOTES = {
-		"Updated RuneLite price API compatibility for the latest client.",
+		"Mining now includes an icon loot log for ores and Motherlode Mine sack rewards, with quantities and values.",
 		"New per-skill panels track processed items, XP, XP/hr, output value, cost, profit, and GP/XP.",
 		"Farming helpers now include compost, needs-compost, protection checks, Anima timers, and permanent compost marker support.",
 		"Hunter now includes birdhouse stats, seeded birdhouse checks, and a configurable impling finder.",
@@ -523,6 +537,7 @@ public class SkillingToolkitPlugin extends Plugin
 	private final EnumMap<SkillingToolkitStatsPeriod, SkillingToolkitStats> statsByPeriod = new EnumMap<>(SkillingToolkitStatsPeriod.class);
 	private final EnumMap<FarmingActivityType, Long> lastFarmingStatsRunAtMillis = new EnumMap<>(FarmingActivityType.class);
 	private final Map<Integer, Long> lastInventoryQuantities = new HashMap<>();
+	private final Map<Integer, Long> motherlodeWithdrawalSnapshot = new HashMap<>();
 	private final Map<Integer, Long> ignoredInventoryReturns = new HashMap<>();
 	private final Map<Integer, Integer> ignoredInventoryReturnExpiryTicks = new HashMap<>();
 	private final List<PendingInventoryValueChange> pendingInventoryValueChanges = new ArrayList<>();
@@ -597,6 +612,9 @@ public class SkillingToolkitPlugin extends Plugin
 	private int lastHarvestSceneScanTick = -HARVEST_SCENE_SCAN_INTERVAL;
 	private boolean trackerValuesLoaded;
 	private boolean inventoryTrackerBaselineReady;
+	private boolean motherlodeStateInitialized;
+	private boolean motherlodeWithdrawalPending;
+	private int motherlodeSackSize;
 	private int inventoryTrackerIgnoreTicks;
 	private int pendingEquipmentTransferTick = Integer.MIN_VALUE;
 	private Skill activeSkillingSkill;
@@ -1121,6 +1139,10 @@ public class SkillingToolkitPlugin extends Plugin
 			visibleAnimaPatches.clear();
 			activeProtectableFarmingPatches.clear();
 			lastInventoryQuantities.clear();
+			motherlodeWithdrawalSnapshot.clear();
+			motherlodeStateInitialized = false;
+			motherlodeWithdrawalPending = false;
+			motherlodeSackSize = 0;
 			ignoredInventoryReturns.clear();
 			ignoredInventoryReturnExpiryTicks.clear();
 			pendingInventoryValueChanges.clear();
@@ -1162,6 +1184,7 @@ public class SkillingToolkitPlugin extends Plugin
 		cleanupPendingInventoryValueChanges();
 		cleanupPendingProcessingActivity();
 		cleanupPendingHerbCleanings();
+		syncMotherlodeSackState();
 		cleanupIgnoredInventoryReturns();
 		pruneReadyBirdhouses();
 		pruneExpiredPatchTimers();
@@ -1201,6 +1224,26 @@ public class SkillingToolkitPlugin extends Plugin
 		}
 
 		updateTrackedSkillXp(event.getSkill(), event.getXp());
+	}
+
+	@Subscribe
+	public void onVarbitChanged(VarbitChanged event)
+	{
+		if (event.getVarbitId() != VarbitID.MOTHERLODE_SACK_TRANSMIT || !isInMotherlodeMine())
+		{
+			return;
+		}
+
+		int currentSackSize = client.getVarbitValue(VarbitID.MOTHERLODE_SACK_TRANSMIT);
+		if (motherlodeStateInitialized && currentSackSize < motherlodeSackSize)
+		{
+			motherlodeWithdrawalSnapshot.clear();
+			motherlodeWithdrawalSnapshot.putAll(snapshotMotherlodeLootQuantities());
+			motherlodeWithdrawalPending = true;
+		}
+
+		motherlodeSackSize = currentSackSize;
+		motherlodeStateInitialized = true;
 	}
 
 	@Subscribe
@@ -1297,6 +1340,10 @@ public class SkillingToolkitPlugin extends Plugin
 	public void onChatMessage(ChatMessage event)
 	{
 		handleHerbSackChatMessage(event);
+		if (recordMotherlodeGemMessage(event))
+		{
+			return;
+		}
 
 		if (!isFarmingStatusMessageType(event.getType())
 			|| (!config.showCompostIndicator()
@@ -1851,6 +1898,8 @@ public class SkillingToolkitPlugin extends Plugin
 			}
 		}
 
+		captureMotherlodeWithdrawal(gainedQuantities);
+
 		if (shouldIgnoreInventoryValueChange() || isSuspiciousEmptyInventoryRefresh(currentQuantities))
 		{
 			recordIgnoredInventoryMovement(lastInventoryQuantities, currentQuantities);
@@ -1892,6 +1941,155 @@ public class SkillingToolkitPlugin extends Plugin
 
 		lastInventoryQuantities.clear();
 		lastInventoryQuantities.putAll(currentQuantities);
+	}
+
+	private void syncMotherlodeSackState()
+	{
+		if (!isInMotherlodeMine())
+		{
+			motherlodeStateInitialized = false;
+			motherlodeWithdrawalPending = false;
+			motherlodeWithdrawalSnapshot.clear();
+			return;
+		}
+
+		int currentSackSize = client.getVarbitValue(VarbitID.MOTHERLODE_SACK_TRANSMIT);
+		if (motherlodeStateInitialized && currentSackSize < motherlodeSackSize)
+		{
+			motherlodeWithdrawalSnapshot.clear();
+			motherlodeWithdrawalSnapshot.putAll(snapshotMotherlodeLootQuantities());
+			motherlodeWithdrawalPending = true;
+		}
+
+		motherlodeSackSize = currentSackSize;
+		motherlodeStateInitialized = true;
+	}
+
+	private boolean captureMotherlodeWithdrawal(Map<Integer, Long> gainedQuantities)
+	{
+		if (!motherlodeWithdrawalPending)
+		{
+			return false;
+		}
+
+		motherlodeWithdrawalPending = false;
+		Map<Integer, Long> currentLoot = snapshotMotherlodeLootQuantities();
+		Map<Integer, Long> withdrawn = positiveQuantityDifference(motherlodeWithdrawalSnapshot, currentLoot);
+		motherlodeWithdrawalSnapshot.clear();
+		if (withdrawn.isEmpty())
+		{
+			return false;
+		}
+
+		long totalValue = 0L;
+		for (Map.Entry<Integer, Long> entry : withdrawn.entrySet())
+		{
+			long quantity = entry.getValue();
+			long value = getItemProfitValue(entry.getKey(), quantity);
+			totalValue += value;
+			addMiningLootStats(entry.getKey(), quantity, value, System.currentTimeMillis());
+			subtractQuantity(gainedQuantities, entry.getKey(), quantity);
+		}
+
+		if (totalValue > 0L)
+		{
+			markSkillingActivity();
+			addProfit(totalValue);
+		}
+		return true;
+	}
+
+	private Map<Integer, Long> snapshotMotherlodeLootQuantities()
+	{
+		ItemContainer inventory = client.getItemContainer(InventoryID.INVENTORY);
+		Map<Integer, Long> quantities = new HashMap<>();
+		if (inventory == null)
+		{
+			return quantities;
+		}
+
+		for (Item item : inventory.getItems())
+		{
+			if (item == null || !MOTHERLODE_LOOT_ITEMS.contains(itemManager.canonicalize(item.getId())) || item.getQuantity() <= 0)
+			{
+				continue;
+			}
+
+			int itemId = itemManager.canonicalize(item.getId());
+			quantities.merge(itemId, (long) item.getQuantity(), Long::sum);
+		}
+		return quantities;
+	}
+
+	static Map<Integer, Long> positiveQuantityDifference(Map<Integer, Long> previous, Map<Integer, Long> current)
+	{
+		Map<Integer, Long> difference = new HashMap<>();
+		Set<Integer> itemIds = new HashSet<>();
+		itemIds.addAll(previous.keySet());
+		itemIds.addAll(current.keySet());
+		for (int itemId : itemIds)
+		{
+			long delta = current.getOrDefault(itemId, 0L) - previous.getOrDefault(itemId, 0L);
+			if (delta > 0L)
+			{
+				difference.put(itemId, delta);
+			}
+		}
+		return difference;
+	}
+
+	private boolean isInMotherlodeMine()
+	{
+		if (!isLoggedIn() || client.getMapRegions() == null || client.getMapRegions().length == 0)
+		{
+			return false;
+		}
+
+		for (int region : client.getMapRegions())
+		{
+			if (!MOTHERLODE_MAP_REGIONS.contains(region))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private boolean recordMotherlodeGemMessage(ChatMessage event)
+	{
+		if (event.getType() != ChatMessageType.SPAM || !isInMotherlodeMine())
+		{
+			return false;
+		}
+
+		String message = Text.removeTags(event.getMessage());
+		int itemId;
+		switch (message)
+		{
+			case "You just found a Sapphire!":
+				itemId = ItemID.UNCUT_SAPPHIRE;
+				break;
+			case "You just found an Emerald!":
+				itemId = ItemID.UNCUT_EMERALD;
+				break;
+			case "You just found a Ruby!":
+				itemId = ItemID.UNCUT_RUBY;
+				break;
+			case "You just found a Diamond!":
+				itemId = ItemID.UNCUT_DIAMOND;
+				break;
+			default:
+				return false;
+		}
+
+		long value = getItemProfitValue(itemId, 1L);
+		addMiningLootStats(itemId, 1L, value, System.currentTimeMillis());
+		if (value > 0L)
+		{
+			markSkillingActivity();
+			addProfit(value);
+		}
+		return true;
 	}
 
 	private void neutralizeCleanedHerbChanges(Map<Integer, Long> gainedQuantities, Map<Integer, Long> spentQuantities)
@@ -2587,6 +2785,17 @@ public class SkillingToolkitPlugin extends Plugin
 		return name == null || name.isBlank() ? "Item " + itemId : name;
 	}
 
+	void addStatsItemImage(JLabel label, int itemId, long quantity)
+	{
+		if (label == null || itemId <= 0)
+		{
+			return;
+		}
+
+		int displayQuantity = (int) Math.min(Integer.MAX_VALUE, Math.max(1L, quantity));
+		itemManager.getImage(itemId, displayQuantity, quantity > 1L).addTo(label);
+	}
+
 	private long getConfiguredItemPrice(int itemId)
 	{
 		if (config.priceSource() == ToolkitPriceSource.RUNELITE)
@@ -2989,6 +3198,11 @@ public class SkillingToolkitPlugin extends Plugin
 			persistStatsValue(period);
 		}
 		refreshToolkitPanel();
+	}
+
+	private void addMiningLootStats(int itemId, long quantity, long value, long nowMillis)
+	{
+		addProcessingActivityStats(Skill.MINING, itemId, quantity, 0L, 0L, value, nowMillis);
 	}
 
 	private void persistStatsValue(SkillingToolkitStatsPeriod period)

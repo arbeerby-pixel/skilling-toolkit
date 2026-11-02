@@ -27,6 +27,12 @@ https://discord.gg/utYem4XhQS
 - Seeded bird houses receive a check marker until they are ready or emptied.
 - Birdhouse statistics track runs, Hunter XP, nests, nest value, and per-run averages.
 
+### Mining
+
+- The Mining panel shows a loot log with real item icons, names, quantities, and total value.
+- Motherlode Mine sack withdrawals are tracked as ore rewards without counting pay-dirt a second time.
+- Motherlode Mine gems found through chat messages are included in the loot log.
+
 ### Trackers and interface
 
 - Dynamic chat-tab trackers show XP, top skill, profit, cost, and actions in the order they become active.
